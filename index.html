@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+    <meta name="theme-color" content="#0b0d12" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <meta name="description" content="MineVerse —— 在浏览器里运行的体素沙盒，程序化生成的方块世界与生存玩法。" />
+    <title>MineVerse · 方块宇宙</title>
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game-canvas"></canvas>
+      <div id="ui-root"></div>
+      <div id="boot-overlay">
+        <div class="boot-panel">
+          <div class="boot-title">MineVerse</div>
+          <div class="boot-sub">方块宇宙</div>
+          <div class="boot-bar"><div id="boot-progress"></div></div>
+          <div id="boot-status" class="boot-status">正在加载引擎…</div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

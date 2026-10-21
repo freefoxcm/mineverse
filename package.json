@@ -1,0 +1,30 @@
+{
+  "name": "mineverse",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "MineVerse — a Minecraft-like voxel sandbox built from scratch with Three.js + TypeScript",
+  "scripts": {
+    "dev": "vite --port 5199 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 5199 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "node scripts/e2e.mjs",
+    "verify": "pnpm typecheck && pnpm test && pnpm build",
+    "deploy": "node scripts/deploy-pages.mjs"
+  },
+  "dependencies": {
+    "@fontsource/silkscreen": "5.3.0",
+    "three": "0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/three": "0.186.0",
+    "playwright-core": "1.64.1",
+    "typescript": "~5.9.3",
+    "vite": "8.3.4",
+    "vitest": "5.0.5"
+  }
+}

@@ -1,0 +1,9 @@
+node_modules/
+dist/
+artifacts/
+*.log
+.DS_Store
+Thumbs.db
+.deploy-gh-pages/
+.env.local
+coverage/
