@@ -3,10 +3,12 @@
  * renders dropped items and arrows, and animates walking / idling / hurt /
  * death / creeper flashes / spider legs, with a flat foot shadow per entity.
  *
- * Wiring (Lead, in main.ts):
+ * Wiring (Lead, in game.ts):
  *   const entityRenderer = new EntityRenderer(scene, (tile) => atlas.layerOf(tile), {
- *     skins: MOB_SKINS,          // Art-E's src/art/mobSkins.ts
- *     atlasTexture: atlas.texture, // optional but needed for textured block drops
+ *     skins: MOB_SKINS,              // Art-E's src/art/mobSkins.ts
+ *     atlasTexture: atlas.texture,   // needed for textured block drops
+ *     itemTexture: itemAtlas.texture,// ItemIconAtlas: 2D sprites for non-block drops
+ *     itemLayerOf: (id) => itemAtlas.layerOf(id),
  *   });
  *   // every frame, after entityManager.update(++tick, world, player, dtTicks):
  *   entityRenderer.sync(entityManager.snapshots(), camera, alpha, {
@@ -51,8 +53,15 @@ export interface EntityRendererOptions {
    * render as flat colour cubes instead of textured mini blocks.
    */
   atlasTexture?: THREE.Texture;
-  /** Optional item-sprite layer resolver for future item-icon atlas tiles. */
-  itemIconLayerOf?: (itemId: string) => number | null;
+  /**
+   * Item sprite texture array (`ItemIconAtlas.texture`). When set together with
+   * `itemLayerOf`, non-block dropped items render as camera-facing 2D sprites
+   * instead of coloured mini cubes. The texture is owned by the caller: the
+   * renderer never disposes it.
+   */
+  itemTexture?: THREE.DataArrayTexture;
+  /** Resolve an item id to its layer in `itemTexture` (null = no sprite). */
+  itemLayerOf?: (itemId: string) => number | null;
   /** Render foot shadows (default true). */
   shadows?: boolean;
   /** Entity groups farther than this from the camera are hidden (default 192). */
@@ -62,6 +71,8 @@ export interface EntityRendererOptions {
 const MOB_SHADE = [0.8, 0.8, 1.0, 0.5, 0.85, 0.85] as const;
 const ITEM_SHADE = [0.78, 0.78, 1.0, 0.5, 0.9, 0.9] as const;
 const Z_AXIS = new THREE.Vector3(0, 0, 1);
+/** World size of a dropped-item billboard sprite. */
+const ITEM_SPRITE_SIZE = 0.26;
 
 const MOB_VERTEX = /* glsl */ `
 in float aLayer;
@@ -195,6 +206,8 @@ interface ItemRecord {
   shadow: THREE.Mesh;
   itemId: string;
   bobSeed: number;
+  /** True when the mesh is a camera-facing 2D billboard (non-block sprite). */
+  sprite: boolean;
 }
 
 interface ArrowRecord {
@@ -353,12 +366,29 @@ function wrapAngle(angle: number): number {
   return value;
 }
 
+/**
+ * Camera-facing quad for a 2D item icon. Uses the same ITEM shader as the mini
+ * blocks (aLayer selects the sprite layer in the item texture array, aShade and
+ * aTint stay 1 so the icon renders at full brightness).
+ */
+function createSpriteGeometry(layer: number): THREE.BufferGeometry {
+  const geometry = new THREE.PlaneGeometry(ITEM_SPRITE_SIZE, ITEM_SPRITE_SIZE);
+  const count = geometry.getAttribute('position').count;
+  const layers = new Float32Array(count).fill(layer);
+  const shades = new Float32Array(count).fill(1);
+  const tints = new Float32Array(count * 3).fill(1);
+  geometry.setAttribute('aLayer', new THREE.BufferAttribute(layers, 1));
+  geometry.setAttribute('aShade', new THREE.BufferAttribute(shades, 1));
+  geometry.setAttribute('aTint', new THREE.BufferAttribute(tints, 3));
+  return geometry;
+}
+
 export class EntityRenderer {
   readonly root = new THREE.Group();
   private readonly records = new Map<number, RenderRecord>();
   private readonly scene: THREE.Scene;
   private readonly atlasLayerOf: (tile: string) => number;
-  private readonly itemIconLayerOf?: (itemId: string) => number | null;
+  private readonly itemSpriteLayerOf: ((itemId: string) => number | null) | null;
   private readonly cullDistance: number;
   private readonly shadowsEnabled: boolean;
 
@@ -368,10 +398,13 @@ export class EntityRenderer {
   private readonly ownsAtlasTexture: boolean;
   private readonly mobMaterialTemplateUniforms: Record<string, THREE.IUniform>;
   private readonly itemMaterial: THREE.ShaderMaterial;
+  /** Material for non-block item sprites (null when no itemTexture was given). */
+  private readonly itemSpriteMaterial: THREE.ShaderMaterial | null;
   private readonly shadowGeometry: THREE.CircleGeometry;
   private readonly shadowMaterial: THREE.MeshBasicMaterial;
   private readonly mobGeometries = new Map<string, THREE.BufferGeometry>();
   private readonly itemGeometries = new Map<string, THREE.BufferGeometry>();
+  private readonly itemSpriteGeometries = new Map<number, THREE.BufferGeometry>();
   private readonly skinLayers = new Map<string, number>();
   private readonly mobMaterials = new Set<THREE.ShaderMaterial>();
 
@@ -382,7 +415,6 @@ export class EntityRenderer {
   ) {
     this.scene = scene;
     this.atlasLayerOf = atlasLayerOf;
-    this.itemIconLayerOf = options.itemIconLayerOf;
     this.cullDistance = options.cullDistance ?? 192;
     this.shadowsEnabled = options.shadows ?? true;
 
@@ -415,6 +447,30 @@ export class EntityRenderer {
       vertexShader: ITEM_VERTEX,
       fragmentShader: ITEM_FRAGMENT,
     });
+
+    // Non-block drops: dedicated item-icon texture array + alpha-tested
+    // billboard material. The texture belongs to the caller (ItemIconAtlas).
+    if (options.itemTexture && options.itemLayerOf) {
+      this.itemSpriteLayerOf = options.itemLayerOf;
+      this.itemSpriteMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+          uAtlas: { value: options.itemTexture },
+          uDaylight: this.shared.uDaylight,
+          uFogNear: this.shared.uFogNear,
+          uFogFar: this.shared.uFogFar,
+          uFogColor: this.shared.uFogColor,
+        },
+        vertexShader: ITEM_VERTEX,
+        fragmentShader: ITEM_FRAGMENT,
+        transparent: true,
+        depthWrite: true,
+        side: THREE.DoubleSide,
+        alphaTest: 0.5,
+      });
+    } else {
+      this.itemSpriteLayerOf = null;
+      this.itemSpriteMaterial = null;
+    }
 
     this.shadowGeometry = new THREE.CircleGeometry(1, 16);
     this.shadowGeometry.rotateX(-Math.PI / 2);
@@ -478,7 +534,7 @@ export class EntityRenderer {
         record.root.visible = true;
       }
       if (record.kind === 'mob') this.updateMob(record, snapshot, position);
-      else if (record.kind === 'item') this.updateItem(record, snapshot, position);
+      else if (record.kind === 'item') this.updateItem(record, snapshot, position, camera);
       else this.updateArrow(record, snapshot, position);
     }
 
@@ -548,12 +604,39 @@ export class EntityRenderer {
   private createItemRecord(itemId: string): ItemRecord {
     const root = new THREE.Group();
     root.name = `item:${itemId}`;
-    const mesh = new THREE.Mesh(this.itemGeometry(itemId), this.itemMaterial);
-    mesh.position.y = 0.15;
+    const item = getItem(itemId);
+    // Block items stay as textured mini blocks; every other item becomes a
+    // 2D icon billboard when the caller supplied an item texture array.
+    const spriteLayer = item?.block ? null : this.resolveItemSpriteLayer(itemId);
+    const sprite = spriteLayer !== null && this.itemSpriteMaterial !== null;
+    const geometry = sprite
+      ? this.itemSpriteGeometry(spriteLayer as number)
+      : this.itemGeometry(itemId);
+    const mesh = new THREE.Mesh(
+      geometry,
+      sprite && this.itemSpriteMaterial ? this.itemSpriteMaterial : this.itemMaterial,
+    );
+    mesh.position.y = sprite ? 0.17 : 0.15;
     root.add(mesh);
-    const shadow = this.createShadow(0.18);
+    const shadow = this.createShadow(sprite ? 0.16 : 0.18);
     root.add(shadow);
-    return { kind: 'item', root, mesh, shadow, itemId, bobSeed: hashString(itemId) % 1000 };
+    return { kind: 'item', root, mesh, shadow, itemId, bobSeed: hashString(itemId) % 1000, sprite };
+  }
+
+  /** Resolve the item-icon layer; -1/NaN/null from the caller means "no sprite". */
+  private resolveItemSpriteLayer(itemId: string): number | null {
+    if (!this.itemSpriteLayerOf) return null;
+    const layer = this.itemSpriteLayerOf(itemId);
+    if (typeof layer !== 'number' || !Number.isFinite(layer) || layer < 0) return null;
+    return Math.floor(layer);
+  }
+
+  private itemSpriteGeometry(layer: number): THREE.BufferGeometry {
+    const cached = this.itemSpriteGeometries.get(layer);
+    if (cached) return cached;
+    const geometry = createSpriteGeometry(layer);
+    this.itemSpriteGeometries.set(layer, geometry);
+    return geometry;
   }
 
   private createArrowRecord(): ArrowRecord {
@@ -632,20 +715,17 @@ export class EntityRenderer {
         });
       }
     } else {
-      const iconLayer = this.itemIconLayerOf?.(itemId);
+      // No item-icon sprite available: fall back to a coloured mini cube.
       const color = itemDropColor(itemId);
-      const layer = iconLayer ?? (this.ownsAtlasTexture ? 0 : this.atlasLayerOf('stone'));
+      const layer = this.ownsAtlasTexture ? 0 : this.atlasLayerOf('stone');
       geometry = createBoxGeometry([size, size, size], {
         layerOf: () => layer,
         shades: ITEM_SHADE,
-        tint:
-          iconLayer !== null && iconLayer !== undefined
-            ? { r: 1, g: 1, b: 1 }
-            : {
-                r: ((color >> 16) & 255) / 255,
-                g: ((color >> 8) & 255) / 255,
-                b: (color & 255) / 255,
-              },
+        tint: {
+          r: ((color >> 16) & 255) / 255,
+          g: ((color >> 8) & 255) / 255,
+          b: (color & 255) / 255,
+        },
       });
     }
     this.itemGeometries.set(itemId, geometry);
@@ -726,12 +806,25 @@ export class EntityRenderer {
     }
   }
 
-  private updateItem(record: ItemRecord, snapshot: EntitySnapshot, position: THREE.Vector3): void {
+  private updateItem(
+    record: ItemRecord,
+    snapshot: EntitySnapshot,
+    position: THREE.Vector3,
+    camera?: THREE.Camera,
+  ): void {
     const age = snapshot.age;
     const bob = Math.sin(age * 0.16 + record.bobSeed) * 0.045 + 0.12;
     record.root.position.set(position.x, position.y + bob, position.z);
-    record.root.rotation.y = age * 0.06;
-    record.mesh.rotation.x = 0;
+    if (record.sprite) {
+      // Always face the camera so the 2D icon stays readable while bobbing.
+      if (camera) record.root.quaternion.copy(camera.quaternion);
+      else record.root.quaternion.identity();
+      record.mesh.rotation.set(0, 0, 0);
+    } else {
+      // Mini blocks slowly spin around Y like a vanilla dropped item.
+      record.root.rotation.y = age * 0.06;
+      record.mesh.rotation.x = 0;
+    }
     record.shadow.visible = this.shadowsEnabled;
     if (record.shadow.visible) {
       const shadowY = snapshot.shadowY + 0.01;
@@ -785,11 +878,15 @@ export class EntityRenderer {
     this.mobGeometries.clear();
     for (const geometry of this.itemGeometries.values()) geometry.dispose();
     this.itemGeometries.clear();
+    for (const geometry of this.itemSpriteGeometries.values()) geometry.dispose();
+    this.itemSpriteGeometries.clear();
     this.shadowGeometry.dispose();
     this.shadowMaterial.dispose();
     this.itemMaterial.dispose();
+    this.itemSpriteMaterial?.dispose();
     this.skinTexture.dispose();
     if (this.ownsAtlasTexture) this.atlasTexture.dispose();
+    // The caller owns `options.itemTexture` (ItemIconAtlas); never dispose it.
     this.root.removeFromParent();
     void this.scene;
   }

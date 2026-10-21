@@ -14,10 +14,10 @@
 | | |
 |---|---|
 | ![高空景观](docs/screenshots/hero-aerial.png) | ![日落](docs/screenshots/sunset.png) |
-| ![夜晚生物](docs/screenshots/night-mobs.png) | ![洞穴与火把](docs/screenshots/cave.png) |
-| ![第三人称](docs/screenshots/third-person.png) | ![水下](docs/screenshots/underwater.png) |
-| ![背包与合成](docs/screenshots/inventory.png) | ![创造物品栏](docs/screenshots/creative.png) |
-| ![标题界面](docs/screenshots/title.png) | ![爆炸](docs/screenshots/explosion.png) |
+| ![空手手臂](docs/screenshots/hand.png) | ![夜晚生物](docs/screenshots/night-mobs.png) |
+| ![洞穴与火把](docs/screenshots/cave.png) | ![第三人称](docs/screenshots/third-person.png) |
+| ![水下](docs/screenshots/underwater.png) | ![背包与合成](docs/screenshots/inventory.png) |
+| ![创造物品栏](docs/screenshots/creative.png) | ![标题界面](docs/screenshots/title.png) |
 
 ## 特性
 
@@ -31,12 +31,15 @@
 - WebGL2 纹理数组（逐 tile 分层，无图集接缝）、42 种 WebAudio 程序化音效、程序化像素美术（89 方块纹理 / 75 物品图标 / 26 UI 贴图 / 29 生物皮肤）。
 
 ### 玩法
+- 新世界初始补给：石镐/石斧/石剑、16 火把、32 木板、32 圆石、工作台、8 苹果（创造模式改为 9 组建筑方块）；URL 加 `?kit=0` 可关闭。
+- 空手：与原版一致，第一人称始终显示玩家的皮肤手臂（待机微动/挥拳/行走摆动），可徒手挖掘与攻击；截图模式可临时隐藏。
 - 生存：生命/饥饿/饱和度/护甲/氧气、摔落/溺水/岩浆/生物伤害、死亡掉落与重生、工具耐久、熔炉、箱子、工作台。
 - 合成：81 条配方（2×2 背包 / 3×3 工作台、有序/无序、自动偏移、不镜像）+ 14 条熔炼配方与燃料表。
 - 创造模式：飞行、无限方块、即时破坏、创造物品栏（分类 + 搜索）。
 - 生物：僵尸、骷髅、苦力怕、蜘蛛、猪、牛、羊、鸡；3D A* 寻路、刷怪规则、骷髅射箭、苦力怕自爆、TNT 爆炸真实破坏地形。
 - 交互：DDA 射线选取、挖掘进度/裂纹、方块朝向放置、食物、打火石、弓箭、粒子与音效。
-- 第一人称手持物品/挥动动画，以及 F5 第三人称方块角色模型。
+- 掉落物：非方块物品使用物品图标 billboard（朝向相机、浮动），方块物品保持迷你方块模型，不再用纯色方块表示。
+- 第一人称手持物品/挥动动画，以及 F5 第三人称方块角色模型；空手时显示皮肤手臂（与原版一致）。
 
 ### 工程
 - 存档：IndexedDB 多世界、只保存地形改动（edits）+ 方块实体、自动保存 60s、导出/导入 JSON。

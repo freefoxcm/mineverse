@@ -75,8 +75,8 @@ export const HAND_POSES: Readonly<Record<'block' | 'sprite' | 'arm', HandPose>> 
     rotation: [0.05, -0.18, 0.1],
   },
   arm: {
-    position: [0.5, -0.5, -1.15],
-    rotation: [0.35, 0.25, -0.3],
+    position: [0.52, -0.5, -1.05],
+    rotation: [0.35, 0.25, -0.5],
   },
 };
 
@@ -300,7 +300,7 @@ export class FirstPersonHand {
   private readonly spriteMaterial: THREE.ShaderMaterial | null;
   private readonly fallbackMaterial: THREE.MeshBasicMaterial;
   private readonly handRoot = new THREE.Group();
-  private readonly arm: THREE.Mesh;
+  private readonly arm: THREE.Group;
   private itemMesh: THREE.Mesh | null = null;
 
   private currentItemId: string | null = null;
@@ -327,12 +327,38 @@ export class FirstPersonHand {
     if (this.spriteMaterial && options.itemLayerOf) this.itemLayerOf = options.itemLayerOf;
     this.fallbackMaterial = new THREE.MeshBasicMaterial({ color: 0x9a9a9a });
 
-    // Bare arm shown when the hand is empty (thin forearm, angled from the
-    // bottom-right corner). The pose is animated on handRoot in update().
-    const armGeometry = new THREE.BoxGeometry(0.12, 0.12, 0.32);
-    this.arm = new THREE.Mesh(armGeometry, new THREE.MeshBasicMaterial({ color: 0xb9825f }));
-    this.arm.position.set(0, 0, 0);
-    this.arm.rotation.set(0, 0, 0);
+    // Bare arm shown when the hand is empty: a shaded forearm + fist + shirt
+    // sleeve, angled from the bottom-right corner (Minecraft always shows the
+    // player's arm in first person). The pose is animated on handRoot in update().
+    const skinMaterials = (): THREE.MeshBasicMaterial[] => [
+      new THREE.MeshBasicMaterial({ color: 0xc08463 }),
+      new THREE.MeshBasicMaterial({ color: 0xb87b5b }),
+      new THREE.MeshBasicMaterial({ color: 0xd59a76 }),
+      new THREE.MeshBasicMaterial({ color: 0x9d6a4c }),
+      new THREE.MeshBasicMaterial({ color: 0xcb8f6b }),
+      new THREE.MeshBasicMaterial({ color: 0xa87354 }),
+    ];
+    const shirtMaterials = (): THREE.MeshBasicMaterial[] => [
+      new THREE.MeshBasicMaterial({ color: 0x2c8791 }),
+      new THREE.MeshBasicMaterial({ color: 0x277b84 }),
+      new THREE.MeshBasicMaterial({ color: 0x3599a4 }),
+      new THREE.MeshBasicMaterial({ color: 0x1e666e }),
+      new THREE.MeshBasicMaterial({ color: 0x2f8f99 }),
+      new THREE.MeshBasicMaterial({ color: 0x256f78 }),
+    ];
+    const armGroup = new THREE.Group();
+    const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.3), skinMaterials());
+    forearm.position.set(0, 0, 0.02);
+    const fist = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.11, 0.13), skinMaterials());
+    fist.position.set(0, 0.006, -0.19);
+    const thumb = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.05, 0.06), skinMaterials());
+    thumb.position.set(-0.06, 0.035, -0.17);
+    thumb.rotation.z = 0.25;
+    const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.125, 0.1), shirtMaterials());
+    sleeve.position.set(0, 0, 0.19);
+    armGroup.add(forearm, fist, thumb, sleeve);
+    armGroup.scale.setScalar(0.78);
+    this.arm = armGroup;
     this.handRoot.add(this.arm);
 
     this.scene.add(this.handRoot);
@@ -519,8 +545,13 @@ export class FirstPersonHand {
       this.itemMesh.geometry.dispose();
       this.itemMesh = null;
     }
-    this.arm.geometry.dispose();
-    (this.arm.material as THREE.Material).dispose();
+    this.arm.traverse((object) => {
+      if (object instanceof THREE.Mesh) {
+        object.geometry.dispose();
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach((material) => material.dispose());
+      }
+    });
     this.blockMaterial.dispose();
     this.spriteMaterial?.dispose();
     this.fallbackMaterial.dispose();

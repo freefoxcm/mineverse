@@ -90,6 +90,14 @@ function stopProcess(child) {
   const wait = (ms) => page.waitForTimeout(ms);
   const evaluate = (fn, arg) => page.evaluate(fn, arg);
   const shot = async (name) => {
+    // Hide any lingering toast/narration so the screenshots stay clean.
+    await evaluate(() => {
+      document.querySelectorAll('.mv-toast, .toast').forEach((element) => {
+        element.className = element.classList.contains('mv-toast') ? 'mv-toast' : 'toast';
+        element.style.display = 'none';
+      });
+    });
+    await wait(80);
     await page.screenshot({ path: path.join(OUT, `${name}.png`) });
     console.log(`[photos] ${name}.png`);
   };
@@ -100,13 +108,9 @@ function stopProcess(child) {
     await page.waitForFunction(() => window.__MC__ && window.__MC__.ready === true, null, { timeout: 90000 });
     await wait(900);
 
-    // Starter kit for a lively HUD (leave the selected slot empty so the held item
-    // does not block the landscape shots).
+    // Starter kit comes from a fresh world; keep slot 8 empty for the bare-hand shot.
     await evaluate(() => {
       const mc = window.__MC__;
-      for (const id of ['grass_block', 'oak_planks', 'cobblestone', 'oak_log', 'torch', 'glass', 'iron_pickaxe', 'apple']) {
-        mc.give(id, 64);
-      }
       mc.selectSlot(8);
       mc.setTime(4000);
       mc.setBlockOutlineVisible(false);
@@ -247,6 +251,23 @@ function stopProcess(child) {
     }, scenic);
     await wait(900);
 
+    // Empty-hand first-person arm (the game always shows the player's arm like Minecraft).
+    await evaluate((pos) => {
+      const mc = window.__MC__;
+      document.querySelectorAll('.toast').forEach((element) => {
+        element.className = 'toast';
+      });
+      mc.setHandVisible(true);
+      mc.selectSlot(8); // starter kit leaves this slot empty
+      mc.look(pos.yaw, -0.12);
+    }, scenic);
+    await wait(600);
+    await shot('hand');
+    await evaluate(() => {
+      window.__MC__.setHandVisible(false);
+      window.__MC__.selectSlot(0);
+    });
+
     // Third person.
     await evaluate(() => window.__MC__.setThirdPerson(true));
     await wait(500);
@@ -322,6 +343,20 @@ function stopProcess(child) {
     await shot('creative');
     await evaluate(() => window.__MC__.openScreen('none'));
     await wait(250);
+
+    // Dropped item sprites (2D item icons instead of coloured cubes).
+    await evaluate(() => {
+      const mc = window.__MC__;
+      const yaw = mc.player.yaw;
+      mc.spawnItem('diamond_pickaxe', 1);
+      mc.spawnItem('apple', 3);
+      mc.spawnItem('oak_planks', 8);
+      mc.spawnItem('torch', 4);
+      mc.look(yaw, -0.75);
+    });
+    await wait(260);
+    await shot('item-drop');
+    await evaluate(() => window.__MC__.clearEntities());
 
     // Mobs at sunset (creative so nobody gets hit).
     await evaluate(() => {

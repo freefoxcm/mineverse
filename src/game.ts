@@ -17,6 +17,7 @@ import { MOB_SKINS } from './art/mobSkins';
 import { attachInput, toPlayerInput, type InputManager } from './player/input';
 import { InteractionController, breakStage } from './player/interaction';
 import { Player } from './player/player';
+import { maxDurabilityOf } from './player/player';
 import { ParticleRenderer, ParticleSystem, type ParticleKind } from './player/particles';
 import { TextureAtlas } from './render/atlas';
 import { ItemIconAtlas } from './render/itemAtlas';
@@ -62,6 +63,30 @@ const MAX_BOOT_RENDER_DISTANCE = 8;
 
 const WATER_FOG = new THREE.Color(0x1d4a63);
 const LAVA_FOG = new THREE.Color(0x8a2a00);
+
+/** Starting inventory for brand-new worlds (survival gets tools, creative gets blocks). */
+const SURVIVAL_STARTER_KIT: ReadonlyArray<readonly [string, number]> = [
+  ['stone_pickaxe', 1],
+  ['stone_axe', 1],
+  ['stone_sword', 1],
+  ['torch', 16],
+  ['oak_planks', 32],
+  ['cobblestone', 32],
+  ['crafting_table', 1],
+  ['apple', 8],
+];
+
+const CREATIVE_STARTER_KIT: ReadonlyArray<readonly [string, number]> = [
+  ['grass_block', 64],
+  ['oak_planks', 64],
+  ['cobblestone', 64],
+  ['glass', 64],
+  ['torch', 64],
+  ['oak_log', 64],
+  ['sand', 64],
+  ['crafting_table', 64],
+  ['white_wool', 64],
+];
 
 const MOB_SOUND_IDS: Record<string, SoundId | null> = {
   zombie: 'zombie',
@@ -300,6 +325,8 @@ export class Game {
     this.entityRenderer = new EntityRenderer(this.renderer.scene, (tile: string) => this.atlas.layerOf(tile), {
       atlasTexture: this.atlas.texture,
       skins: MOB_SKINS,
+      itemTexture: this.itemAtlas.texture,
+      itemLayerOf: (itemId: string) => (this.itemAtlas.hasItem(itemId) ? this.itemAtlas.layerOf(itemId) : null),
     });
 
     this.renderRadius = Math.min(MAX_BOOT_RENDER_DISTANCE, this.settings.renderDistance);
@@ -374,6 +401,7 @@ export class Game {
       this.player.position = { x: spawn.x, y: spawn.y, z: spawn.z };
       this.player.velocity = { x: 0, y: 0, z: 0 };
       this.player.setLook(0.9, -0.08);
+      if (this.startParams.get('kit') !== '0') this.applyStarterKit();
     }
 
     this.hud.setBootProgress(0.05, '正在生成地形…');
@@ -404,6 +432,17 @@ export class Game {
     this.installDebugApi();
     this.lastTime = performance.now();
     requestAnimationFrame(this.frame);
+  }
+
+  private applyStarterKit(): void {
+    const kit = this.player.gameMode === 'creative' ? CREATIVE_STARTER_KIT : SURVIVAL_STARTER_KIT;
+    for (const [itemId, count] of kit) {
+      const durability = maxDurabilityOf(itemId);
+      this.player.addItem(itemId, count, durability > 0 ? durability : undefined);
+    }
+    this.inventory.setSelectedSlot(0);
+    this.player.setSelectedSlot(0);
+    this.lastHandSignature = '';
   }
 
   private applySavedPlayer(saved: SavedPlayer): void {

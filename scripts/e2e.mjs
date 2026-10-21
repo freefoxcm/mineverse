@@ -213,7 +213,7 @@ async function main() {
       const ty = Math.floor(eyeY - 0.5);
       const tz = Math.round(p.z + dirZ * 1.5);
       const before = mc.getBlock(tx, ty, tz);
-      mc.selectSlot(6); // iron pickaxe
+      mc.selectSlot(0); // starter-kit stone pickaxe
       const stoneId = mc.blockId('stone');
       mc.setBlock(tx, ty, tz, stoneId);
       const placedBefore = mc.getBlock(tx, ty, tz);
