@@ -1,0 +1,367 @@
+/* ==========================================================================
+   MineVerse HUD — pixel style, no external images.
+   ========================================================================== */
+
+#ui-root {
+  --mv-slot-size: 40px;
+  --mv-hotbar-gap: 2px;
+  --mv-font: 'Silkscreen', 'Microsoft YaHei', 'PingFang SC', 'Noto Sans SC', 'Source Han Sans SC', sans-serif;
+  --mv-hud-text: #f2f5fa;
+  --mv-hud-shadow: 2px 2px 0 rgba(0, 0, 0, 0.85);
+}
+
+.mv-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+  font-family: var(--mv-font);
+  color: var(--mv-hud-text);
+  user-select: none;
+}
+
+/* -- crosshair ----------------------------------------------------------- */
+.mv-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  transform: translate(-50%, -50%);
+  opacity: 0.9;
+}
+
+.mv-crosshair::before,
+.mv-crosshair::after {
+  content: '';
+  position: absolute;
+  background: #fff;
+  mix-blend-mode: difference;
+}
+
+.mv-crosshair::before {
+  left: 9px;
+  top: 0;
+  width: 2px;
+  height: 20px;
+}
+
+.mv-crosshair::after {
+  top: 9px;
+  left: 0;
+  width: 20px;
+  height: 2px;
+}
+
+/* -- overlays ------------------------------------------------------------ */
+.mv-underwater {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 240ms ease;
+  background:
+    radial-gradient(ellipse at 50% 45%, rgba(38, 108, 168, 0.16), rgba(6, 34, 66, 0.55) 90%),
+    linear-gradient(180deg, rgba(20, 78, 132, 0.28), rgba(8, 44, 86, 0.45));
+  box-shadow: inset 0 0 180px rgba(4, 24, 52, 0.7);
+}
+
+.mv-underwater.mv-active {
+  opacity: 1;
+}
+
+/* Edge-only damage vignette: keep the screen centre clear so low health or a
+   single zombie hit does not tint the whole scene red. */
+.mv-damage-flash {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background:
+    radial-gradient(ellipse 118% 118% at 50% 50%, rgba(120, 0, 0, 0) 56%, rgba(150, 16, 16, 0.5) 84%, rgba(96, 4, 4, 0.78) 100%);
+}
+
+.mv-damage-flash.mv-flash-active {
+  animation: mv-damage-flash 250ms ease-out;
+}
+
+@keyframes mv-damage-flash {
+  0% {
+    opacity: 0.35;
+  }
+  55% {
+    opacity: 0.16;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+/* -- bottom HUD ---------------------------------------------------------- */
+.mv-hud-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  width: max-content;
+}
+
+.mv-vitals {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 3px;
+  min-height: 22px;
+  gap: 24px;
+}
+
+.mv-vitals-column {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mv-vitals-row {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  min-height: 20px;
+  font-size: 0;
+}
+
+.mv-vitals-right .mv-vitals-row {
+  justify-content: flex-end;
+}
+
+.mv-row-hidden {
+  display: none !important;
+}
+
+.mv-icon {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  image-rendering: pixelated;
+  filter: drop-shadow(1px 1px 0 rgba(0, 0, 0, 0.55));
+}
+
+.mv-creative .mv-vitals {
+  display: none;
+}
+
+.mv-creative .mv-damage-flash,
+.mv-creative .mv-underwater {
+  display: none;
+}
+
+/* -- hotbar -------------------------------------------------------------- */
+.mv-hotbar-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.mv-held-name {
+  min-height: 20px;
+  font-size: 14px;
+  letter-spacing: 1px;
+  color: #f6f7e9;
+  text-shadow: var(--mv-hud-shadow);
+  opacity: 0;
+  transition: opacity 200ms ease;
+  pointer-events: none;
+}
+
+.mv-held-name.mv-visible {
+  opacity: 1;
+}
+
+.mv-hotbar {
+  display: flex;
+  gap: var(--mv-hotbar-gap);
+  padding: 3px;
+  background: rgba(14, 16, 20, 0.72);
+  border: 2px solid rgba(6, 8, 10, 0.85);
+  box-shadow:
+    inset 0 0 0 2px rgba(255, 255, 255, 0.09),
+    0 4px 18px rgba(0, 0, 0, 0.45);
+}
+
+/* -- shared slot visuals (HUD + screens) -------------------------------- */
+.mv-slot {
+  position: relative;
+  width: var(--mv-slot-size);
+  height: var(--mv-slot-size);
+  flex: 0 0 auto;
+  background: linear-gradient(180deg, #9a9d9f 0%, #86898c 100%);
+  border: 2px solid #303338;
+  box-shadow:
+    inset 2px 2px 0 rgba(255, 255, 255, 0.35),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  image-rendering: pixelated;
+}
+
+.mv-slot::before {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  background: rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+}
+
+.mv-slot-icon {
+  width: 84%;
+  height: 84%;
+  object-fit: contain;
+  image-rendering: pixelated;
+  pointer-events: none;
+  filter: drop-shadow(1px 1px 0 rgba(0, 0, 0, 0.35));
+}
+
+.mv-slot-count {
+  position: absolute;
+  right: 2px;
+  bottom: 0;
+  font-size: 13px;
+  line-height: 14px;
+  color: #fff;
+  text-shadow:
+    1px 1px 0 #1d1f22,
+    -1px 0 0 #1d1f22,
+    0 -1px 0 #1d1f22;
+  pointer-events: none;
+  font-family: var(--mv-font);
+}
+
+.mv-slot-durability {
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: 3px;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.75);
+  pointer-events: none;
+}
+
+.mv-slot-durability-fill {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: #5dd35d;
+}
+
+.mv-hotbar-slot {
+  cursor: default;
+}
+
+.mv-hotbar-slot.selected {
+  border-color: #f6f6f2;
+  box-shadow:
+    0 0 0 2px rgba(12, 14, 16, 0.85),
+    inset 2px 2px 0 rgba(255, 255, 255, 0.5),
+    inset -2px -2px 0 rgba(0, 0, 0, 0.3);
+}
+
+.mv-hotbar-slot.selected::after {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border: 2px solid #f6f6f2;
+  pointer-events: none;
+}
+
+.mv-hotbar-index {
+  position: absolute;
+  top: 0;
+  left: 3px;
+  font-size: 9px;
+  line-height: 10px;
+  color: #e8f0ff;
+  text-shadow: 1px 1px 0 #000;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mv-hotbar-slot.selected .mv-hotbar-index {
+  opacity: 0.8;
+}
+
+/* -- F3 debug ------------------------------------------------------------ */
+.mv-debug {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  max-width: 62vw;
+  padding: 8px 10px;
+  font-family: ui-monospace, 'Cascadia Mono', 'Consolas', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre;
+  color: #e9f4e9;
+  background: rgba(0, 0, 0, 0.58);
+  border-left: 3px solid rgba(160, 224, 160, 0.55);
+  text-shadow: 1px 1px 0 rgba(0, 0, 0, 0.8);
+}
+
+/* -- toast --------------------------------------------------------------- */
+.mv-toast {
+  position: absolute;
+  left: 50%;
+  top: 12%;
+  transform: translateX(-50%) translateY(-10px);
+  padding: 9px 18px;
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  color: #fff;
+  background: rgba(10, 12, 16, 0.85);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 180ms ease, transform 180ms ease;
+  pointer-events: none;
+  z-index: 30;
+}
+
+.mv-toast.mv-toast-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.mv-toast-warn {
+  border-color: #c9a13a;
+  color: #ffe8a8;
+}
+
+.mv-toast-error {
+  border-color: #c94a3a;
+  color: #ffc8c0;
+}
+
+/* -- smaller screens ----------------------------------------------------- */
+@media (max-width: 1200px) {
+  #ui-root {
+    --mv-slot-size: 36px;
+  }
+  .mv-icon {
+    width: 18px;
+    height: 18px;
+  }
+}
+
+@media (max-width: 900px) {
+  #ui-root {
+    --mv-slot-size: 30px;
+  }
+  .mv-icon {
+    width: 15px;
+    height: 15px;
+  }
+}

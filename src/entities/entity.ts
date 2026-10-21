@@ -265,16 +265,17 @@ export abstract class Entity {
       this.discard();
       return;
     }
-    const blockedX = this.moveAxis(world, 'x', this.velocity.x * dt);
-    const blockedZ = this.moveAxis(world, 'z', this.velocity.z * dt);
-    if ((blockedX || blockedZ) && this.onGround) this.tryStepUp(world, blockedX, blockedZ);
+    const intendedX = this.velocity.x * dt;
+    const intendedZ = this.velocity.z * dt;
+    const blockedX = this.moveAxis(world, 'x', intendedX);
+    const blockedZ = this.moveAxis(world, 'z', intendedZ);
+    if ((blockedX || blockedZ) && this.onGround) {
+      this.tryStepUp(world, blockedX ? intendedX : 0, blockedZ ? intendedZ : 0);
+    }
 
     if (!this.onGround) this.onGround = this.isSupported(world);
     this.updateWalkPhase(dtTicks, startX, startZ);
   }
-
-  /** Subclass hook called from update; default no-op. */
-  protected postUpdate(_dtTicks: number, _world: WorldView): void {}
 
   protected updateWalkPhase(dtTicks: number, startX: number, startZ: number): void {
     const dx = this.position.x - startX;
@@ -371,18 +372,19 @@ export abstract class Entity {
 
   /**
    * Auto step/jump up a single block when a horizontal move was blocked and a
-   * one-block ledge is free. Keeps chasing mobs from snagging on terrain.
+   * one-block ledge is free. `intendedX/intendedZ` replay the blocked move at
+   * the raised position so the entity lands on top of the ledge instead of
+   * oscillating against its side.
    */
-  protected tryStepUp(world: WorldView, blockedX: boolean, blockedZ: boolean): void {
+  protected tryStepUp(world: WorldView, intendedX: number, intendedZ: number): void {
     const x = this.position.x;
     const z = this.position.z;
     const targetY = this.position.y + STEP_HEIGHT;
     if (this.collidesAt(world, x, targetY, z)) return;
     this.position.y = targetY;
-    if (blockedX) this.moveAxis(world, 'x', Math.sign(this.velocity.x) * 0.2);
-    if (blockedZ) this.moveAxis(world, 'z', Math.sign(this.velocity.z) * 0.2);
-    // Tiny hop so the visual reads as a jump; physics snaps on the next ticks.
-    this.velocity.y = Math.max(this.velocity.y, 0.2);
+    if (Math.abs(intendedX) > 1e-6) this.moveAxis(world, 'x', intendedX);
+    if (Math.abs(intendedZ) > 1e-6) this.moveAxis(world, 'z', intendedZ);
+    this.velocity.y = 0;
   }
 }
 
@@ -436,19 +438,15 @@ export function rayAABB(
 ): number | null {
   let tmin = 0;
   let tmax = maxDistance;
-  const axes: Array<['x' | 'y' | 'z', number, number, number]> = [
-    ['x', origin.x, dir.x, 0],
-    ['y', origin.y, dir.y, 0],
-    ['z', origin.z, dir.z, 0],
-  ];
+  const origins = [origin.x, origin.y, origin.z];
+  const dirs = [dir.x, dir.y, dir.z];
   const mins = [box.minX, box.minY, box.minZ];
   const maxs = [box.maxX, box.maxY, box.maxZ];
   for (let i = 0; i < 3; i++) {
-    const axisInfo = axes[i];
+    const originAxis = origins[i];
+    const dirAxis = dirs[i];
     const min = mins[i];
     const max = maxs[i];
-    const originAxis = axisInfo[1];
-    const dirAxis = axisInfo[2];
     if (Math.abs(dirAxis) < 1e-8) {
       if (originAxis < min || originAxis > max) return null;
       continue;

@@ -1,5 +1,20 @@
+/**
+ * Section mesher (M1). Builds the opaque / cutout / transparent vertex layers for
+ * one 16x16x16 section. The byte format is fixed by docs/CONTRACTS.md §3 and must
+ * not change: positions/uvs/layers/lights(sky,block)/shades(AO*faceShade)/tints
+ * plus 32-bit indices with the (0,1,2),(0,2,3) quad order.
+ *
+ * M1 additions over the M0 skeleton:
+ *  - per-corner smooth lighting (average of the four cells touching the face corner)
+ *  - per-corner ambient occlusion, combined with the face shade
+ *  - face culling between opaque blocks and between same-type transparent blocks
+ *  - cutout / transparent layering, cross plants, torch boxes, liquid surface height
+ *
+ * `meshSection` is a pure function of the `MeshContext`, so it runs both on the main
+ * thread and inside the mesh worker with an identical result.
+ */
 import { CHUNK_SIZE, SECTION_SIZE, WORLD_HEIGHT } from '../core/config';
-import { faceShade, faceTexture, getBlockDef, IS_OPAQUE, RENDER_KIND, ALPHA_KIND, type BlockDef } from './blocks';
+import { faceShade, faceTexture, getBlockDef, ALPHA_KIND, IS_OPAQUE, RENDER_KIND, type BlockDef } from './blocks';
 import { localIndex, type ChunkColumn } from './chunk';
 
 export interface MeshLayerData {
@@ -52,6 +67,18 @@ const FACES: readonly FaceDef[] = [
 ];
 
 const AO_SHADE = [0.45, 0.62, 0.8, 1.0];
+const WHITE_TINT: [number, number, number] = [255, 255, 255];
+
+/** Scratch buffers for the 3x3 light/AO plane around one face (reused per section). */
+interface PlaneScratch {
+  sky: Float32Array;
+  block: Float32Array;
+  opaque: Uint8Array;
+}
+
+function createPlaneScratch(): PlaneScratch {
+  return { sky: new Float32Array(9), block: new Float32Array(9), opaque: new Uint8Array(9) };
+}
 
 class LayerBuilder {
   positions: number[] = [];
@@ -78,7 +105,7 @@ class LayerBuilder {
     this.positions.push(x, y, z);
     this.uvs.push(u, v);
     this.layers.push(layer);
-    this.lights.push(sky, blockLight);
+    this.lights.push(lightBytes(sky), lightBytes(blockLight));
     this.shades.push(Math.max(0, Math.min(255, Math.round(shade * 255))));
     this.tints.push(tint[0], tint[1], tint[2]);
     this.vertexCount++;
@@ -121,10 +148,8 @@ function builderFor(blockId: number, builders: Builders): LayerBuilder {
 }
 
 function lightBytes(level: number): number {
-  return Math.max(0, Math.min(255, level * 17));
+  return Math.max(0, Math.min(255, Math.round(level * 17)));
 }
-
-const WHITE_TINT: [number, number, number] = [255, 255, 255];
 
 interface Box {
   minX: number;
@@ -147,6 +172,7 @@ export function meshSection(ctx: MeshContext, cx: number, cy: number, cz: number
     cutout: new LayerBuilder(),
     transparent: new LayerBuilder(),
   };
+  const scratch = createPlaneScratch();
   const baseX = cx * CHUNK_SIZE;
   const baseY = cy * SECTION_SIZE;
   const baseZ = cz * CHUNK_SIZE;
@@ -170,14 +196,19 @@ export function meshSection(ctx: MeshContext, cx: number, cy: number, cz: number
           addCross(ctx, builder, lx, ly, lz, wx, wy, wz, def, tint);
         } else if (render === 3) {
           const box: Box = { minX: 7 / 16, minY: 0, minZ: 7 / 16, maxX: 9 / 16, maxY: 10 / 16, maxZ: 9 / 16 };
-          addBox(ctx, builder, lx, ly, lz, wx, wy, wz, box, def, tint, false, false);
+          addBox(ctx, scratch, builder, lx, ly, lz, wx, wy, wz, box, def, tint, false, false, false, true);
         } else if (render === 4) {
           const level = ctx.getMeta(wx, wy, wz) & 7;
-          const height = level === 0 ? 0.89 : Math.max(0.12, 0.89 - level * 0.1);
+          const above = ctx.getBlock(wx, wy + 1, wz);
+          // A water block with water above must reach y=1 so a stacked column has no
+          // gaps between the 0.89-high surface boxes.
+          const connectedAbove = above === block;
+          const height = connectedAbove ? 1 : level === 0 ? 0.89 : Math.max(0.12, 0.89 - level * 0.1);
           const box: Box = { minX: 0, minY: 0, minZ: 0, maxX: 1, maxY: height, maxZ: 1 };
-          addBox(ctx, builder, lx, ly, lz, wx, wy, wz, box, def, tint, true, true);
+          addBox(ctx, scratch, builder, lx, ly, lz, wx, wy, wz, box, def, tint, true, true, false);
         } else {
-          addBox(ctx, builder, lx, ly, lz, wx, wy, wz, CUBE, def, tint, true, true);
+          const ao = ALPHA_KIND[block] !== 2;
+          addBox(ctx, scratch, builder, lx, ly, lz, wx, wy, wz, CUBE, def, tint, true, false, ao);
         }
       }
     }
@@ -190,8 +221,18 @@ export function meshSection(ctx: MeshContext, cx: number, cy: number, cz: number
   };
 }
 
+/** True when the face between `def` and its neighbour should not be emitted. */
+function cullFace(def: BlockDef, neighbour: number): boolean {
+  if (IS_OPAQUE[neighbour]) return true;
+  const self = def.numeric;
+  // Same-type transparent blocks (glass/leaves/cactus/water) share no visible face.
+  if (neighbour === self && ALPHA_KIND[self] !== 0) return true;
+  return false;
+}
+
 function addBox(
   ctx: MeshContext,
+  scratch: PlaneScratch,
   builder: LayerBuilder,
   lx: number,
   ly: number,
@@ -204,9 +245,11 @@ function addBox(
   tint: readonly [number, number, number],
   cullNeighbours: boolean,
   liquid: boolean,
+  applyAo: boolean,
+  skipBottomIfOpaque = false,
 ): void {
   const flatCube = box.minX === 0 && box.minY === 0 && box.minZ === 0 && box.maxX === 1 && box.maxY === 1 && box.maxZ === 1;
-  const ops: number[] = [box.minX, box.minY, box.minZ, box.maxX, box.maxY, box.maxZ];
+  const alpha = ALPHA_KIND[def.numeric];
 
   for (let face = 0; face < FACE_COUNT; face++) {
     const fd = FACES[face];
@@ -214,21 +257,15 @@ function addBox(
     const ny = wy + fd.normal[1];
     const nz = wz + fd.normal[2];
     const neighbour = ctx.getBlock(nx, ny, nz);
+    if (cullNeighbours && cullFace(def, neighbour)) continue;
+    // Small boxes (torches) are flush with the floor only at their bottom face.
+    if (skipBottomIfOpaque && face === 3 && IS_OPAQUE[neighbour]) continue;
+    // Liquid faces are only visible against non-opaque, non-same-liquid cells.
+    if (liquid && neighbour === def.numeric) continue;
 
-    if (cullNeighbours) {
-      if (IS_OPAQUE[neighbour]) continue;
-      if (liquid && (neighbour === def.numeric || neighbour === 0)) {
-        // keep liquid faces against air, cull between liquid cells
-        if (neighbour === def.numeric) continue;
-      } else if (!liquid && ALPHA_KIND[def.numeric] !== 0 && neighbour === def.numeric) {
-        continue;
-      }
-    }
-
-    const sky = lightBytes(ctx.getSkyLight(nx, ny, nz));
-    const blockLight = lightBytes(ctx.getBlockLight(nx, ny, nz));
     const tile = faceTexture(def, face);
     const layer = ctx.layerOf(tile);
+    samplePlane(ctx, scratch, fd, nx, ny, nz);
 
     const p0: [number, number, number] = [
       fd.p0[0] === 1 ? box.maxX : box.minX,
@@ -246,24 +283,6 @@ function addBox(
       fd.v[2] * (box.maxZ - box.minZ),
     ];
 
-    const ao: number[] = [3, 3, 3, 3];
-    if (flatCube && ALPHA_KIND[def.numeric] === 0) {
-      for (let corner = 0; corner < 4; corner++) {
-        const du = corner === 1 || corner === 2 ? 1 : -1;
-        const dv = corner === 2 || corner === 3 ? 1 : -1;
-        const ax = fd.u[0] * du;
-        const ay = fd.u[1] * du;
-        const az = fd.u[2] * du;
-        const bx = fd.v[0] * dv;
-        const by = fd.v[1] * dv;
-        const bz = fd.v[2] * dv;
-        const side1 = IS_OPAQUE[ctx.getBlock(nx + ax, ny + ay, nz + az)] === 1;
-        const side2 = IS_OPAQUE[ctx.getBlock(nx + bx, ny + by, nz + bz)] === 1;
-        const cornerBlocked = IS_OPAQUE[ctx.getBlock(nx + ax + bx, ny + ay + by, nz + az + bz)] === 1;
-        ao[corner] = side1 && side2 ? 0 : 3 - (Number(side1) + Number(side2) + Number(cornerBlocked));
-      }
-    }
-
     const corners: readonly [number, number][] = [
       [0, 0],
       [1, 0],
@@ -272,14 +291,83 @@ function addBox(
     ];
     for (let c = 0; c < 4; c++) {
       const [du, dv] = corners[c];
+      const su = du === 1 ? 1 : -1;
+      const sv = dv === 1 ? 1 : -1;
+      const ao = applyAo && flatCube && alpha !== 2 ? cornerAo(scratch, su, sv) : 3;
+      const [skyLevel, blockLevel] = cornerLight(scratch, su, sv);
+      const shade = fd.shade * AO_SHADE[ao];
       const px = lx + p0[0] + uVec[0] * du + vVec[0] * dv;
       const py = ly + p0[1] + uVec[1] * du + vVec[1] * dv;
       const pz = lz + p0[2] + uVec[2] * du + vVec[2] * dv;
-      const shade = fd.shade * AO_SHADE[ao[c]];
-      builder.addVertex(px, py, pz, du, dv, layer, sky, blockLight, shade, tint);
+      builder.addVertex(px, py, pz, du, dv, layer, skyLevel, blockLevel, shade, tint);
     }
     builder.addQuadIndices();
   }
+}
+
+/** Fill the 3x3 plane of light/opacity samples around a face's outward cell. */
+function samplePlane(ctx: MeshContext, scratch: PlaneScratch, fd: FaceDef, nx: number, ny: number, nz: number): void {
+  let index = 0;
+  for (let sv = -1; sv <= 1; sv++) {
+    for (let su = -1; su <= 1; su++) {
+      const x = nx + fd.u[0] * su + fd.v[0] * sv;
+      const y = ny + fd.u[1] * su + fd.v[1] * sv;
+      const z = nz + fd.u[2] * su + fd.v[2] * sv;
+      const block = ctx.getBlock(x, y, z);
+      scratch.opaque[index] = IS_OPAQUE[block];
+      scratch.sky[index] = ctx.getSkyLight(x, y, z);
+      scratch.block[index] = ctx.getBlockLight(x, y, z);
+      index++;
+    }
+  }
+}
+
+function planeIndex(su: number, sv: number): number {
+  return (sv + 1) * 3 + (su + 1);
+}
+
+/**
+ * Smooth light for one corner: average of the outward cell and the two edge cells
+ * plus the diagonal cell, skipping opaque cells (they carry no light).
+ */
+function cornerLight(scratch: PlaneScratch, su: number, sv: number): [number, number] {
+  const base = planeIndex(0, 0);
+  const side1 = planeIndex(su, 0);
+  const side2 = planeIndex(0, sv);
+  const corner = planeIndex(su, sv);
+  const side1Opaque = scratch.opaque[side1] === 1;
+  const side2Opaque = scratch.opaque[side2] === 1;
+  if (side1Opaque && side2Opaque) {
+    return [scratch.sky[base], scratch.block[base]];
+  }
+  let sky = scratch.sky[base];
+  let block = scratch.block[base];
+  let count = 1;
+  if (!side1Opaque) {
+    sky += scratch.sky[side1];
+    block += scratch.block[side1];
+    count++;
+  }
+  if (!side2Opaque) {
+    sky += scratch.sky[side2];
+    block += scratch.block[side2];
+    count++;
+  }
+  if (scratch.opaque[corner] === 0) {
+    sky += scratch.sky[corner];
+    block += scratch.block[corner];
+    count++;
+  }
+  return [sky / count, block / count];
+}
+
+/** AO level 0..3 for a corner: 3 = open, 0 = fully enclosed. */
+function cornerAo(scratch: PlaneScratch, su: number, sv: number): number {
+  const side1 = scratch.opaque[planeIndex(su, 0)] === 1;
+  const side2 = scratch.opaque[planeIndex(0, sv)] === 1;
+  const corner = scratch.opaque[planeIndex(su, sv)] === 1;
+  if (side1 && side2) return 0;
+  return 3 - (Number(side1) + Number(side2) + Number(corner));
 }
 
 function addCross(
@@ -294,8 +382,8 @@ function addCross(
   def: BlockDef,
   tint: readonly [number, number, number],
 ): void {
-  const sky = lightBytes(ctx.getSkyLight(wx, wy, wz));
-  const blockLight = lightBytes(ctx.getBlockLight(wx, wy, wz));
+  const sky = ctx.getSkyLight(wx, wy, wz);
+  const blockLight = ctx.getBlockLight(wx, wy, wz);
   const layer = ctx.layerOf(faceTexture(def, 2));
   const lo = 0.15;
   const hi = 0.85;
@@ -318,7 +406,9 @@ function addCross(
   for (const quad of quads) {
     for (let c = 0; c < 4; c++) {
       const p = quad[c];
-      builder.addVertex(lx + p[0], ly + p[1], lz + p[2], c === 1 || c === 2 ? 1 : 0, c >= 2 ? 1 : 0, layer, sky, blockLight, 1, tint);
+      const u = c === 1 || c === 2 ? 1 : 0;
+      const v = c >= 2 ? 1 : 0;
+      builder.addVertex(lx + p[0], ly + p[1], lz + p[2], u, v, layer, sky, blockLight, 1, tint);
     }
     builder.addQuadIndices();
   }
@@ -333,4 +423,15 @@ export function meshColumn(ctx: MeshContext, column: ChunkColumn): SectionMeshDa
   return result;
 }
 
+/** True when a section contains at least one renderable (non-air) block. */
+export function sectionHasBlocks(blocks: Uint8Array, sectionY: number): boolean {
+  const start = sectionY * 16 * 256;
+  const end = start + 16 * 256;
+  for (let i = start; i < end; i++) {
+    if (blocks[i] !== 0) return true;
+  }
+  return false;
+}
+
 export { faceShade };
+

@@ -335,3 +335,30 @@ body {
     font-size: 34px;
   }
 }
+
+/* ------------------------------------------------------------------------- */
+/* Screen tints (underwater / lava)                                           */
+/* ------------------------------------------------------------------------- */
+.screen-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 220ms ease;
+  z-index: 5;
+}
+
+.screen-overlay.visible {
+  opacity: 1;
+}
+
+.water-overlay {
+  background:
+    radial-gradient(ellipse at 50% 50%, rgba(20, 78, 112, 0.25) 0%, rgba(12, 52, 80, 0.55) 100%);
+  box-shadow: inset 0 0 120px rgba(4, 24, 40, 0.85);
+}
+
+.lava-overlay {
+  background:
+    radial-gradient(ellipse at 50% 50%, rgba(200, 60, 0, 0.45) 0%, rgba(120, 20, 0, 0.85) 100%);
+}

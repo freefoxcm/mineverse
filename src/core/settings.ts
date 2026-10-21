@@ -4,8 +4,10 @@ import {
   MIN_RENDER_DISTANCE,
 } from './config';
 import { clamp } from './math';
+import type { Difficulty } from './types';
 
 export interface GameSettings {
+  difficulty: Difficulty;
   renderDistance: number;
   fov: number;
   sensitivity: number;
@@ -17,6 +19,7 @@ export interface GameSettings {
 }
 
 export const DEFAULT_SETTINGS: GameSettings = {
+  difficulty: 'normal',
   renderDistance: DEFAULT_RENDER_DISTANCE,
   fov: 70,
   sensitivity: 1,
@@ -39,6 +42,14 @@ export function normalizeSettings(input: unknown): GameSettings {
   if (!isRecord(input)) return base;
   if (typeof input.renderDistance === 'number') {
     base.renderDistance = Math.round(clamp(input.renderDistance, MIN_RENDER_DISTANCE, MAX_RENDER_DISTANCE));
+  }
+  if (
+    input.difficulty === 'peaceful' ||
+    input.difficulty === 'easy' ||
+    input.difficulty === 'normal' ||
+    input.difficulty === 'hard'
+  ) {
+    base.difficulty = input.difficulty;
   }
   if (typeof input.fov === 'number') base.fov = Math.round(clamp(input.fov, 50, 110));
   if (typeof input.sensitivity === 'number') base.sensitivity = clamp(input.sensitivity, 0.1, 3);

@@ -19,14 +19,36 @@ export function parseColor(color: Color): RGBA {
   }
   const cached = COLOR_CACHE.get(color);
   if (cached) return cached;
-  let hex = color.trim();
-  if (hex.startsWith('#')) hex = hex.slice(1);
-  if (hex.length === 3) {
-    hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+  const text = color.trim();
+  let rgba: RGBA;
+  if (text.startsWith('rgb')) {
+    // CSS "rgb(r,g,b)" / "rgba(r,g,b,a)" strings are handy for effect overlays.
+    const open = text.indexOf('(');
+    const close = text.lastIndexOf(')');
+    const parts = text
+      .slice(open + 1, close > open ? close : text.length)
+      .split(',')
+      .map((part) => Number.parseFloat(part.trim()));
+    const clamp = (value: number, max: number) =>
+      Number.isFinite(value) ? Math.max(0, Math.min(max, Math.round(value))) : 0;
+    rgba = [
+      clamp(parts[0] ?? 0, 255),
+      clamp(parts[1] ?? 0, 255),
+      clamp(parts[2] ?? 0, 255),
+      clamp((parts[3] ?? 1) * 255, 255),
+    ];
+  } else {
+    let hex = text;
+    if (hex.startsWith('#')) hex = hex.slice(1);
+    if (hex.length === 3) {
+      hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2];
+    } else if (hex.length === 4) {
+      hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2] + hex[3] + hex[3];
+    }
+    if (hex.length === 6) hex += 'ff';
+    const value = Number.parseInt(hex, 16);
+    rgba = [(value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255];
   }
-  if (hex.length === 6) hex += 'ff';
-  const value = Number.parseInt(hex, 16);
-  const rgba: RGBA = [(value >>> 24) & 255, (value >>> 16) & 255, (value >>> 8) & 255, value & 255];
   COLOR_CACHE.set(color, rgba);
   return rgba;
 }

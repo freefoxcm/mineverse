@@ -327,7 +327,7 @@ defineBlock('chest', {
 defineBlock('torch', {
   name: '火把',
   tex: 'torch',
-  render: 'torch',
+  render: 'cross',
   alpha: 'cutout',
   solid: false,
   opaque: false,

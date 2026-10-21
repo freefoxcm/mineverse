@@ -40,6 +40,13 @@ export class GameRenderer {
     this.camera.updateProjectionMatrix();
   }
 
+  /** Clamped pixel ratio (1 = device pixels scaled by settings). */
+  setPixelRatio(ratio: number): void {
+    const pixelRatio = Math.min(window.devicePixelRatio || 1, Math.max(0.5, ratio));
+    this.webgl.setPixelRatio(pixelRatio);
+    this.webgl.setSize(window.innerWidth, window.innerHeight, false);
+  }
+
   render(): void {
     this.webgl.render(this.scene, this.camera);
   }

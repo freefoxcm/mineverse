@@ -58,7 +58,7 @@ const DEFAULT_OPTS: Required<Omit<PathOptions, 'goalRadius'>> & { goalRadius: nu
   maxDrop: 3,
   avoidLiquids: true,
   bodyHeight: 2,
-  goalRadius: 1,
+  goalRadius: 0,
 };
 
 interface ResolvedOptions {
@@ -116,6 +116,7 @@ export function canStandAt(
 function canFallThrough(
   world: WorldView,
   x: number,
+  z: number,
   yFrom: number,
   yTo: number,
   opts: ResolvedOptions,
@@ -228,23 +229,32 @@ function resolveGoalNode(
   const x = Math.floor(target.x);
   const z = Math.floor(target.z);
   const baseY = Math.floor(target.y + 0.01);
-  if (canStandAt(world, x, baseY, z, opts)) return { x, y: baseY, z };
-  const candidates: Array<{ x: number; y: number; z: number; d: number }> = [];
-  for (let dy = -2; dy <= 2; dy++) {
-    for (let dz = -opts.goalRadius; dz <= opts.goalRadius; dz++) {
-      for (let dx = -opts.goalRadius; dx <= opts.goalRadius; dx++) {
-        const cx = x + dx;
-        const cy = baseY + dy;
-        const cz = z + dz;
-        if (!canStandAt(world, cx, cy, cz, opts)) continue;
-        candidates.push({ x: cx, y: cy, z: cz, d: Math.abs(dx) + Math.abs(dz) + Math.abs(dy) * 0.5 });
+  if (!canStandAt(world, x, baseY, z, opts)) {
+    // Search a small neighbourhood for the closest standable goal cell.
+    const searchRadius = Math.max(1, opts.goalRadius);
+    const candidates: Array<{ x: number; y: number; z: number; d: number }> = [];
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dz = -searchRadius; dz <= searchRadius; dz++) {
+        for (let dx = -searchRadius; dx <= searchRadius; dx++) {
+          const cx = x + dx;
+          const cy = baseY + dy;
+          const cz = z + dz;
+          if (!canStandAt(world, cx, cy, cz, opts)) continue;
+          candidates.push({
+            x: cx,
+            y: cy,
+            z: cz,
+            d: Math.abs(dx) + Math.abs(dz) + Math.abs(dy) * 0.5,
+          });
+        }
       }
     }
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => a.d - b.d || a.y - b.y || a.x - b.x || a.z - b.z);
+    const best = candidates[0];
+    return { x: best.x, y: best.y, z: best.z };
   }
-  if (candidates.length === 0) return null;
-  candidates.sort((a, b) => a.d - b.d || a.y - b.y || a.x - b.x || a.z - b.z);
-  const best = candidates[0];
-  return { x: best.x, y: best.y, z: best.z };
+  return { x, y: baseY, z };
 }
 
 function waypointsFromPath(path: PathNode[], goalX: number, goalZ: number): Vec3[] {
@@ -450,7 +460,7 @@ function generateNeighbours(
     for (let drop = 1; drop <= opts.maxDrop; drop++) {
       const dropY = node.y - drop;
       if (!canStandAt(world, nx, dropY, nz, opts)) continue;
-      if (!canFallThrough(world, nx, node.y, dropY, opts)) continue;
+      if (!canFallThrough(world, nx, nz, node.y, dropY, opts)) continue;
       out.push({ x: nx, y: dropY, z: nz, cost: 1 + drop * 0.2 });
       break;
     }
