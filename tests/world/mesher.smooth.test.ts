@@ -213,17 +213,17 @@ describe('liquid, torch and cross geometry', () => {
     expect(maxY(data.transparent!)).toBeCloseTo(5.59, 5);
   });
 
-  it('builds the torch as a small cutout box', () => {
+  it('builds the torch as a cross cutout sprite', () => {
     const blocks = new Map([['5,5,5', BLOCK.torch]]);
     const data = meshSection(makeContext(blocks), 0, 0, 0);
     expect(data.opaque).toBeNull();
     const torch = data.cutout!;
-    expect(vertices(torch)).toBe(24);
+    expect(vertices(torch)).toBe(8);
     expect(minY(torch)).toBeCloseTo(5, 5);
-    expect(maxY(torch)).toBeCloseTo(5 + 10 / 16, 5);
+    expect(maxY(torch)).toBeCloseTo(6, 5);
     for (let i = 0; i < torch.positions.length; i += 3) {
-      expect(torch.positions[i]).toBeGreaterThanOrEqual(5 + 7 / 16 - 1e-6);
-      expect(torch.positions[i]).toBeLessThanOrEqual(5 + 9 / 16 + 1e-6);
+      expect(torch.positions[i]).toBeGreaterThanOrEqual(5 + 0.15 - 1e-6);
+      expect(torch.positions[i]).toBeLessThanOrEqual(5 + 0.85 + 1e-6);
     }
   });
 
