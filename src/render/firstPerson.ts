@@ -75,8 +75,8 @@ export const HAND_POSES: Readonly<Record<'block' | 'sprite' | 'arm', HandPose>> 
     rotation: [0.05, -0.18, 0.1],
   },
   arm: {
-    position: [0.4, -0.38, -0.62],
-    rotation: [0.32, 0.28, -0.2],
+    position: [0.46, -0.42, -0.78],
+    rotation: [0.3, 0.3, -0.25],
   },
 };
 
@@ -329,8 +329,8 @@ export class FirstPersonHand {
 
     // Bare arm shown when the hand is empty (thin forearm, angled from the
     // bottom-right corner). The pose is animated on handRoot in update().
-    const armGeometry = new THREE.BoxGeometry(0.12, 0.14, 0.55);
-    this.arm = new THREE.Mesh(armGeometry, new THREE.MeshBasicMaterial({ color: 0xc98b68 }));
+    const armGeometry = new THREE.BoxGeometry(0.14, 0.14, 0.36);
+    this.arm = new THREE.Mesh(armGeometry, new THREE.MeshBasicMaterial({ color: 0xb9825f }));
     this.arm.position.set(0, 0, 0);
     this.arm.rotation.set(0, 0, 0);
     this.handRoot.add(this.arm);
