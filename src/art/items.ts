@@ -64,18 +64,22 @@ function toolIcon(matKey: string, kind: ToolKind): ItemPainter {
     const handle = new IconShape();
     if (kind === 'sword') {
       handle.thickLine(9, 26, 13, 21, 3);
+    } else if (kind === 'pickaxe') {
+      // shorter handle: the head meets it at the middle of the arc
+      handle.thickLine(10, 27, 19, 16, 3);
     } else {
       handle.thickLine(9, 28, 19, 15, 3);
     }
     const head = new IconShape();
     if (kind === 'pickaxe') {
-      // curved pick head: an arc band plus two prongs
-      for (let i = 0; i <= 26; i++) {
-        const angle = Math.PI * (1.03 + (0.94 * i) / 26);
-        head.circle(20 + Math.cos(angle) * 9, 12 + Math.sin(angle) * 9, 1.9);
+      // flat pick head: ~110 degree arc with pointed tips, socket at the middle
+      for (let i = 0; i <= 20; i++) {
+        const angle = Math.PI * (1.19 + (0.62 * i) / 20);
+        head.circle(20 + Math.cos(angle) * 8.6, 15 + Math.sin(angle) * 8.6, 1.7);
       }
-      head.thickLine(11, 11, 10, 16, 2);
-      head.thickLine(29, 11, 30, 16, 2);
+      head.thickLine(13, 9, 11, 13, 2);
+      head.thickLine(27, 9, 29, 13, 2);
+      head.circle(20, 13.5, 2.2);
     } else if (kind === 'axe') {
       // broad hatchet blade with a curved cutting edge on the right
       head.polygon([
@@ -117,7 +121,8 @@ function toolIcon(matKey: string, kind: ToolKind): ItemPainter {
       if (kind === 'axe') rimLight(p, head, 'right', palette.light);
       if (kind === 'pickaxe') {
         rimLight(p, head, 'top', palette.light);
-        p.set(20, 3, palette.dark);
+        // dark socket pixel where the handle enters the head
+        p.set(20, 14, palette.dark);
       }
       if (kind === 'shovel') {
         p.set(20, 6, palette.light);

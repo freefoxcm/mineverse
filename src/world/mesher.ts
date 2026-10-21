@@ -14,6 +14,7 @@
  * thread and inside the mesh worker with an identical result.
  */
 import { CHUNK_SIZE, SECTION_SIZE, WORLD_HEIGHT } from '../core/config';
+import { hash3i } from '../core/rng';
 import { faceShade, faceTexture, getBlockDef, ALPHA_KIND, IS_OPAQUE, RENDER_KIND, type BlockDef } from './blocks';
 import { localIndex, type ChunkColumn } from './chunk';
 
@@ -58,15 +59,15 @@ interface FaceDef {
 
 /** Face order: +X -X +Y -Y +Z -Z. */
 const FACES: readonly FaceDef[] = [
-  { normal: [1, 0, 0], p0: [1, 0, 1], u: [0, 0, -1], v: [0, 1, 0], shade: 0.62 },
-  { normal: [-1, 0, 0], p0: [0, 0, 0], u: [0, 0, 1], v: [0, 1, 0], shade: 0.62 },
+  { normal: [1, 0, 0], p0: [1, 0, 1], u: [0, 0, -1], v: [0, 1, 0], shade: 0.58 },
+  { normal: [-1, 0, 0], p0: [0, 0, 0], u: [0, 0, 1], v: [0, 1, 0], shade: 0.58 },
   { normal: [0, 1, 0], p0: [0, 1, 1], u: [1, 0, 0], v: [0, 0, -1], shade: 1.0 },
-  { normal: [0, -1, 0], p0: [0, 0, 0], u: [1, 0, 0], v: [0, 0, 1], shade: 0.48 },
-  { normal: [0, 0, 1], p0: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0], shade: 0.8 },
-  { normal: [0, 0, -1], p0: [1, 0, 0], u: [-1, 0, 0], v: [0, 1, 0], shade: 0.8 },
+  { normal: [0, -1, 0], p0: [0, 0, 0], u: [1, 0, 0], v: [0, 0, 1], shade: 0.4 },
+  { normal: [0, 0, 1], p0: [0, 0, 1], u: [1, 0, 0], v: [0, 1, 0], shade: 0.74 },
+  { normal: [0, 0, -1], p0: [1, 0, 0], u: [-1, 0, 0], v: [0, 1, 0], shade: 0.74 },
 ];
 
-const AO_SHADE = [0.45, 0.62, 0.8, 1.0];
+const AO_SHADE = [0.32, 0.55, 0.78, 1.0];
 const WHITE_TINT: [number, number, number] = [255, 255, 255];
 
 /** Scratch buffers for the 3x3 light/AO plane around one face (reused per section). */
@@ -266,6 +267,21 @@ function addBox(
     const tile = faceTexture(def, face);
     const layer = ctx.layerOf(tile);
     samplePlane(ctx, scratch, fd, nx, ny, nz);
+    // Finished-colour art: biome tint only makes sense on grass tops (the sides
+    // show dirt, which must stay brown next to untinted dirt blocks). Leaves and
+    // plants still receive their mild foliage tint on every face.
+    const faceTint = def.tint === 'grass' && face !== 2 ? WHITE_TINT : tint;
+    // Subtle per-block tint jitter breaks the "one flat green sheet" look of large
+    // grass/leaf areas without changing the palette.
+    let jitteredTint = faceTint;
+    if (faceTint !== WHITE_TINT) {
+      const jitter = 0.95 + ((hash3i(0x7f4a7c15, wx, wy, wz) >>> 24) / 255) * 0.1;
+      jitteredTint = [
+        Math.min(255, Math.round(faceTint[0] * jitter)),
+        Math.min(255, Math.round(faceTint[1] * jitter)),
+        Math.min(255, Math.round(faceTint[2] * jitter)),
+      ];
+    }
 
     const p0: [number, number, number] = [
       fd.p0[0] === 1 ? box.maxX : box.minX,
@@ -289,8 +305,24 @@ function addBox(
       [1, 1],
       [0, 1],
     ];
+    const uvRotation =
+      def.uvVary || (def.tint === 'grass' && (face === 2 || face === 3))
+        ? hash3i(0x51ed270b, wx, wy * 3 + face, wz) & 3
+        : 0;
     for (let c = 0; c < 4; c++) {
       const [du, dv] = corners[c];
+      let uu = du;
+      let vv = dv;
+      if (uvRotation === 1) {
+        uu = 1 - dv;
+        vv = du;
+      } else if (uvRotation === 2) {
+        uu = 1 - du;
+        vv = 1 - dv;
+      } else if (uvRotation === 3) {
+        uu = dv;
+        vv = 1 - du;
+      }
       const su = du === 1 ? 1 : -1;
       const sv = dv === 1 ? 1 : -1;
       const ao = applyAo && flatCube && alpha !== 2 ? cornerAo(scratch, su, sv) : 3;
@@ -299,7 +331,7 @@ function addBox(
       const px = lx + p0[0] + uVec[0] * du + vVec[0] * dv;
       const py = ly + p0[1] + uVec[1] * du + vVec[1] * dv;
       const pz = lz + p0[2] + uVec[2] * du + vVec[2] * dv;
-      builder.addVertex(px, py, pz, du, dv, layer, skyLevel, blockLevel, shade, tint);
+      builder.addVertex(px, py, pz, uu, vv, layer, skyLevel, blockLevel, shade, jitteredTint);
     }
     builder.addQuadIndices();
   }

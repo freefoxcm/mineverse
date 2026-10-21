@@ -352,7 +352,16 @@ async function main() {
     await wait(700);
     const respawned = await evaluate(() => ({ screen: window.__MC__.getScreen(), dead: window.__MC__.player.dead, health: window.__MC__.player.health }));
     check('respawn works', respawned.dead === false && respawned.health > 0, JSON.stringify(respawned));
-    await evaluate(() => window.__MC__.setTime(6000));
+    await evaluate(() => {
+      window.__MC__.setTime(6000);
+      window.__MC__.clearEntities();
+      // Clean up debug/chat leftovers so the remaining screenshots are pristine.
+      const chat = document.querySelector('.mv-chatlog');
+      if (chat) chat.innerHTML = '';
+      document.querySelectorAll('.toast').forEach((element) => {
+        element.className = 'toast';
+      });
+    });
 
     // Crafting table via the real inventory UI (2x2 grid + result slot).
     await evaluate(() => {
@@ -443,6 +452,16 @@ async function main() {
     await shot('26-cave');
     await evaluate((pos) => window.__MC__.teleport(pos.x, pos.y, pos.z), scenic.plains ?? scenic.fallback);
     await wait(700);
+
+    // Wide sky shot (sun/clouds) for atmosphere review.
+    await evaluate(() => {
+      const mc = window.__MC__;
+      mc.setTime(4000);
+      mc.look(mc.player.yaw, 0.42);
+    });
+    await wait(600);
+    await shot('27-sky');
+    await evaluate(() => window.__MC__.setTime(6000));
 
     // Mobs + explosion screenshots (creative mode so mobs do not chase the camera).
     await evaluate(() => {

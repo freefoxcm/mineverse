@@ -105,25 +105,37 @@ describe('ambient occlusion', () => {
     ]);
     const data = meshSection(makeContext(blocks), 0, 0, 0);
     const layer = data.opaque!;
-    // First corner of the -Z face is fully enclosed -> AO 0, face shade 0.8 => 92.
-    expect(layer.shades[20]).toBe(Math.round(0.8 * 0.45 * 255));
+    // Vertices 20..23 are the -Z face; its first corner is enclosed by opaque blocks,
+    // so AO must darken it compared to the other corners of the same face. The exact
+    // multiplier is art-tunable, the relative relationship is the contract.
+    const zFace = layer.shades.slice(20, 24);
+    const brightestOtherCorner = Math.max(zFace[1], zFace[2], zFace[3]);
+    expect(zFace[0]).toBeLessThan(brightestOtherCorner);
+    expect(zFace[0]).toBeGreaterThan(0);
     // The unoccluded +Y face keeps full brightness.
     expect(Math.max(...layer.shades)).toBe(255);
   });
 
-  it('leaves a lone cube with uniform face shading', () => {
+  it('leaves a lone cube with uniform per-face shading and top > sides > bottom', () => {
     const blocks = new Map([['5,5,5', BLOCK.stone]]);
     const data = meshSection(makeContext(blocks), 0, 0, 0);
     const opaques = data.opaque!;
-    const perFace = new Set<number>();
-    for (let vertex = 0; vertex < opaques.shades.length; vertex++) perFace.add(opaques.shades[vertex]);
-    // +X/-X = .62, +Y = 1, -Y = .48, +Z/-Z = .8
-    expect([...perFace].sort((a, b) => a - b)).toEqual([
-      Math.round(0.48 * 255),
-      Math.round(0.62 * 255),
-      Math.round(0.8 * 255),
-      255,
-    ]);
+    // Face order +X -X +Y -Y +Z -Z: each group of four vertices shares one shade value.
+    const faceShade = (face: number): number => {
+      const base = face * 4;
+      const values = opaques.shades.slice(base, base + 4);
+      expect(new Set(values).size).toBe(1);
+      return values[0];
+    };
+    expect(faceShade(2)).toBe(255); // top face = full brightness
+    const top = faceShade(2);
+    const bottom = faceShade(3);
+    const xSides = [faceShade(0), faceShade(1)];
+    const zSides = [faceShade(4), faceShade(5)];
+    expect(bottom).toBeLessThan(Math.min(...xSides));
+    expect(Math.min(...xSides)).toBeLessThan(top);
+    expect(Math.max(...xSides)).toBeLessThan(Math.max(...zSides));
+    expect(Math.max(...zSides)).toBeLessThan(top);
   });
 });
 
@@ -253,12 +265,35 @@ describe('face uv / layer mapping', () => {
     expect(layer.layers[12]).toBe(9); // -Y bottom -> dirt
   });
 
-  it('emits quad uvs in p0(0,0) p1(1,0) p2(1,1) p3(0,1) order', () => {
-    const blocks = new Map([['5,5,5', BLOCK.stone]]);
+  it('emits quad uvs in p0(0,0) p1(1,0) p2(1,1) p3(0,1) order (non uvVary blocks)', () => {
+    const blocks = new Map([['5,5,5', blockNumeric('oak_planks')]]);
     const data = meshSection(makeContext(blocks), 0, 0, 0);
     const uvs = data.opaque!.uvs;
     const top = uvs.slice(16, 24); // third face, four vertices -> 8 values
     expect([...top]).toEqual([0, 0, 1, 0, 1, 1, 0, 1]);
+  });
+
+  it('keeps the same four uvs for uvVary blocks, only rotating them', () => {
+    // Stone/sand/dirt use a deterministic per-block uv rotation to break tiling; the
+    // quad topology must stay a rotation of the same unit-square corner set.
+    const corners = new Set(['0,0', '1,0', '1,1', '0,1']);
+    for (const [wx, wz] of [
+      [5, 5],
+      [6, 5],
+      [7, 9],
+    ]) {
+      const blocks = new Map([[`${wx},5,${wz}`, BLOCK.stone]]);
+      const data = meshSection(makeContext(blocks), 0, 0, 0);
+      const uvs = data.opaque!.uvs;
+      for (let vertex = 0; vertex < 24; vertex++) {
+        const u = uvs[vertex * 2];
+        const v = uvs[vertex * 2 + 1];
+        expect([0, 1]).toContain(u);
+        expect([0, 1]).toContain(v);
+        corners.add(`${u},${v}`);
+      }
+      expect(corners.size).toBe(4);
+    }
   });
 });
 

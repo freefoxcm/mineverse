@@ -1,568 +1,213 @@
-import { hash2f, hash2i, mulberry32 } from '../core/rng';
-import {
-  bevel,
-  blobs,
-  col,
-  fbm,
-  mixPixel,
-  palette,
-  rgb,
-  smoothNoise,
-  specks,
-  tone,
-  voronoi,
-  wrap,
-  type Rgba,
-} from './pixelKit';
-import type { PixelPainter } from './pixels';
-import { TILE_SIZE as T, type TilePainter } from './types';
+import { hash2i, mulberry32 } from '../core/rng';
+import { Sprite16, sprite16 } from './tile16';
+import type { TilePainter } from './types';
 
 /**
- * Procedural block textures for MineVerse (32x32, original pixel art).
+ * Procedural block textures for MineVerse, authored on a **16x16 logical grid**
+ * and stamped into the 32x32 tile as crisp 2x2 blocks (see `tile16.ts`).
  *
- * Art direction:
- * - colours are close to the vanilla brightness range but authored from scratch;
- * - low-frequency clustered colour variation (value noise) + a few crisp specks,
- *   never a uniform salt-and-pepper noise field (mipmaps alias badly and it reads
- *   as "white noise" at distance);
- * - surfaces that tile vertically/horizontally are seamless (wrapped blobs);
- * - wood has directional grain (vertical bark on sides, annual rings on tops);
- * - every painter is deterministic and idempotent.
+ * Why: the first mipmap level of a 32x32 tile authored this way is exactly the
+ * 16x16 art, so distant surfaces stay clean Minecraft-style pixels instead of
+ * blurring into soft noise. Palettes stay at 3-4 tones per material with hard
+ * edges; detail is small high-frequency clusters, never large soft gradients.
+ *
+ * All painters are deterministic (seeded hash / mulberry32) and idempotent.
+ * Every name referenced by `blocks.ts` faceTexture() is covered, plus crack_0..9.
  */
 
+const GRASS_BASE = '#79C05A';
+const DIRT_BASE = '#8A5B33';
+const STONE_BASE = '#7F7F7F';
+
 // ---------------------------------------------------------------------------
-// small bitmap glyph helper (TNT label)
+// shared painters
 // ---------------------------------------------------------------------------
 
-const GLYPHS: Record<string, readonly number[]> = {
-  T: [0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100],
-  N: [0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001],
-};
-
-function stampGlyph(p: PixelPainter, glyph: readonly number[], x: number, y: number, color: Rgba): void {
-  for (let row = 0; row < glyph.length; row++) {
-    const bits = glyph[row];
-    for (let bit = 0; bit < 5; bit++) {
-      if ((bits >> (4 - bit)) & 1) p.set(x + bit, y + row, color);
-    }
-  }
+function paintStone(s: Sprite16, seed: number): void {
+  s.fill(STONE_BASE);
+  s.noise(seed, [STONE_BASE, '#757575', '#8A8A8A', '#6A6A6A', '#909090'], [7, 3, 3, 2, 1]);
+  // chunky light/dark chips (1-3 cells) + fine cracks
+  s.clusters(seed ^ 0x51, ['#8C8C8C'], 3, 1);
+  s.clusters(seed ^ 0x52, ['#6F6F6F'], 3, 1);
+  s.line(3, 3, 5, 6, '#626262');
+  s.line(5, 6, 8, 7, '#626262');
+  s.set(9, 11, '#616161');
+  s.set(10, 12, '#616161');
+  s.set(11, 12, '#616161');
+  s.set(6, 1, '#969696');
+  s.set(2, 12, '#8E8E8E');
+  s.set(13, 5, '#8E8E8E');
+  s.set(12, 13, '#8E8E8E');
 }
 
-// ---------------------------------------------------------------------------
-// stone family
-// ---------------------------------------------------------------------------
-
-function stoneTile(
-  seed: number,
-  base: string,
-  light: string,
-  dark: string,
-  accents: readonly string[] = [],
-): TilePainter {
-  return (p) => {
-    p.fill(base);
-    tone(p, seed, light, dark, { cell: 6, strength: 0.24, levels: 4 });
-    // small clustered patches of lighter/darker stone (never per-pixel noise)
-    blobs(p, seed ^ 0x9c1, [light, dark], 6, 1, 1);
-    // sparse short crevices add depth without becoming visual noise
-    const rng = mulberry32(seed ^ 0x51a7);
-    for (let i = 0; i < 4; i++) {
-      let x = Math.floor(rng() * T);
-      let y = Math.floor(rng() * T);
-      const length = 2 + Math.floor(rng() * 3);
-      for (let s = 0; s < length; s++) {
-        p.set(wrap(x), wrap(y), dark);
-        x += 1;
-        if (rng() < 0.35) y += 1;
-      }
-    }
-    specks(p, seed ^ 0x9c3, [dark, light, ...accents], 8);
-  };
+function paintDirt(s: Sprite16, seed: number): void {
+  s.fill(DIRT_BASE);
+  s.noise(seed, [DIRT_BASE, '#7C4F2B', '#98683E', '#6D4425'], [7, 3, 3, 2]);
+  s.speckle(seed ^ 0x11, ['#6D4425', '#6D4425', '#A27447'], 8);
+  s.rect(4, 10, 2, 1, '#5F3A1E');
+  s.set(11, 4, '#5F3A1E');
+  s.set(12, 4, '#5F3A1E');
+  s.set(2, 2, '#A27447');
+  s.set(13, 12, '#A27447');
 }
 
-/**
- * Igneous rock with visible mineral grains: the grains are painted as tiny
- * 2-5 px clumps, not single pixels, so the tile stays readable at mip levels.
- */
-function speckledStone(
-  seed: number,
-  base: string,
-  light: string,
-  dark: string,
-  grains: readonly [string, string],
-): TilePainter {
-  return (p) => {
-    p.fill(base);
-    tone(p, seed, light, dark, { cell: 6, strength: 0.2, levels: 4 });
-    blobs(p, seed ^ 0x11, [grains[0]], 8, 1, 1);
-    blobs(p, seed ^ 0x12, [grains[1]], 6, 1, 1);
-    specks(p, seed ^ 0x13, [grains[0], grains[1], light, dark], 6);
-  };
-}
-
-const stone: TilePainter = stoneTile(0x1101, '#7d7d7d', '#8a8a8a', '#707070', ['#868686']);
-
-const granite = speckledStone(0x1111, '#9a6a5e', '#a97a6c', '#87594e', ['#b0867a', '#71483e']);
-const diorite = speckledStone(0x1112, '#bcbcc0', '#c8c8cc', '#aaaaae', ['#d3d3d7', '#8c8c93']);
-const andesite = speckledStone(0x1113, '#8c8c8e', '#98989a', '#7e7e80', ['#a5a5a7', '#6f6f71']);
-
-const smoothStone: TilePainter = (p) => {
-  p.fill('#9a9a9a');
-  tone(p, 0x3061, '#a4a4a4', '#909090', { cell: 8, strength: 0.09, levels: 3 });
-  blobs(p, 0x3063, ['#a0a0a0', '#939393'], 4, 1, 1);
-  p.rect(0, 0, T, 1, '#a6a6a6');
-  p.rect(0, T - 1, T, 1, '#8a8a8a');
-  specks(p, 0x3062, ['#a2a2a2', '#8f8f8f'], 6);
-};
-
-function cobblestoneTile(seed: number, mossy: boolean): TilePainter {
-  return (p) => {
-    p.fill('#4a4a4a');
-    voronoi(p, seed, {
-      grid: 4,
-      gap: 1.7,
-      colors: ['#8d8d8d', '#7f7f7f', '#969696', '#747474', '#858585', '#9d9d9d', '#6e6e6e'],
-      color: '#474747',
-      highlight: '#a2a2a2',
-      shadow: '#5d5d5d',
-      relief: 0.16,
-    });
-    tone(p, seed ^ 0x77, '#9c9c9c', '#5c5c5c', { cell: 6, strength: 0.1, levels: 3 });
-    if (mossy) {
-      blobs(p, seed ^ 0x1f2e, ['#5c7a3a', '#4c682e', '#6a8a44'], 12, 1, 2);
-      specks(p, seed ^ 0x1f30, ['#6f8f47', '#425c28'], 12);
-      tone(p, seed ^ 0x1f31, '#6d8f47', '#405a27', { cell: 4, strength: 0.08, levels: 2 });
-    }
-    specks(p, seed ^ 0x44, ['#a0a0a0', '#5f5f5f'], 6);
-  };
-}
-
-const cobblestone: TilePainter = cobblestoneTile(0x1201, false);
-const mossyCobblestone: TilePainter = cobblestoneTile(0x1201, true);
-
-// ---------------------------------------------------------------------------
-// soil / sand / gravel / clay
-// ---------------------------------------------------------------------------
-
-function dirtTile(seed: number, coarse: boolean): TilePainter {
-  const base = coarse ? '#7b5635' : '#87603e';
-  const light = coarse ? '#8b6642' : '#97704a';
-  const dark = coarse ? '#66472b' : '#745030';
-  return (p) => {
-    p.fill(base);
-    tone(p, seed, light, dark, { cell: 5, strength: 0.22, levels: 4 });
-    blobs(p, seed ^ 0x71, coarse ? ['#5f4329', '#93683f'] : ['#6b4a2c', '#a07850'], coarse ? 7 : 5, 1, 1);
-    specks(p, seed ^ 0x13, ['#6a482a', '#a37b52', '#5f3f24'], coarse ? 14 : 10);
-  };
-}
-
-const dirtBase: TilePainter = dirtTile(0x33aa, false);
-
-const coarseDirt: TilePainter = dirtTile(0x33ab, true);
-
-const sand: TilePainter = (p) => {
-  p.fill('#dcd3a1');
-  tone(p, 0x1901, '#e9e0b2', '#c9bf8d', { cell: 6, strength: 0.14, levels: 4 });
-  // wind ripples: a few short horizontal darker grains
-  const rng = mulberry32(0x1902);
-  for (let i = 0; i < 6; i++) {
-    const x = Math.floor(rng() * T);
-    const y = Math.floor(rng() * T);
-    p.rect(x, y, 2 + Math.floor(rng() * 3), 1, '#c6bb89');
-  }
-  specks(p, 0x1903, ['#c4b98a', '#e8dfb3', '#cdc292'], 14);
-  blobs(p, 0x1904, ['#e6dcae', '#d2c795'], 3, 1, 1);
-};
-
-const sandstoneTop: TilePainter = (p) => {
-  p.fill('#d8cc9a');
-  tone(p, 0x1a01, '#e3d8a7', '#c8ba87', { cell: 7, strength: 0.12, levels: 4 });
-  p.rect(0, 0, T, 1, '#e7dcae');
-  p.rect(0, T - 1, T, 1, '#c0b27e');
-  specks(p, 0x1a02, ['#c5b681', '#e9dfb0'], 16);
-};
-
-const sandstoneSide: TilePainter = (p) => {
-  p.fill('#d6ca97');
-  tone(p, 0x1b01, '#e1d6a5', '#c4b681', { cell: 8, strength: 0.1, levels: 3 });
-  // sedimentary stratification
-  const strata = [3, 4, 10, 11, 18, 19, 25, 26];
-  strata.forEach((y, index) => {
-    p.rect(0, y, T, 1, index % 2 === 0 ? '#cbbd88' : '#c0b17b');
-  });
-  // top cap
-  p.rect(0, 0, T, 2, '#e4d9a8');
-  p.rect(0, 2, T, 1, '#c8ba86');
-  // vertical flutes in the lower part
-  const rng = mulberry32(0x1b02);
-  for (let i = 0; i < 7; i++) {
-    const x = Math.floor(rng() * T);
-    p.rect(x, 12 + Math.floor(rng() * 5), 1, 2 + Math.floor(rng() * 4), '#c6b883');
-  }
-  specks(p, 0x1b03, ['#cdc08c', '#e8ddad', '#bdae79'], 14);
-};
-
-const sandstoneBottom: TilePainter = (p) => {
-  p.fill('#cfc28e');
-  tone(p, 0x1c01, '#dbcf9d', '#bbad79', { cell: 7, strength: 0.13, levels: 4 });
-  p.rect(0, 0, T, 1, '#bab078');
-  specks(p, 0x1c02, ['#bdaf7b', '#dfd4a2'], 18);
-  const rng = mulberry32(0x1c03);
-  for (let i = 0; i < 4; i++) {
-    const x = Math.floor(rng() * T);
-    p.rect(x, 3 + Math.floor(rng() * 24), 1, 2 + Math.floor(rng() * 3), '#b5a771');
-  }
-};
-
-const gravel: TilePainter = (p) => {
-  p.fill('#575350');
-  voronoi(p, 0x1d01, {
-    grid: 5,
-    gap: 1.05,
-    colors: ['#8d8783', '#9a948e', '#817b77', '#a39d97', '#6f6a66', '#948e88'],
-    color: '#56524f',
-    highlight: '#aaa49c',
-    shadow: '#615c58',
-    relief: 0.26,
-  });
-  tone(p, 0x1d02, '#a29c95', '#615c58', { cell: 5, strength: 0.12, levels: 3 });
-  specks(p, 0x1d03, ['#a8a29a', '#5c5753'], 8);
-};
-
-const clay: TilePainter = (p) => {
-  p.fill('#a6b0ba');
-  tone(p, 0x1e01, '#b2bcc6', '#98a2ac', { cell: 6, strength: 0.14, levels: 4 });
-  blobs(p, 0x1e02, ['#9ca6b0', '#b4bec8'], 7, 1, 1);
-  specks(p, 0x1e03, ['#8e98a2', '#b9c3cb'], 8);
-};
-
-const bedrock: TilePainter = (p) => {
-  p.fill('#3c3c3c');
-  voronoi(p, 0x1f01, {
-    grid: 5,
-    gap: 1.7,
-    colors: ['#454545', '#3a3a3a', '#4d4d4d', '#343434', '#424242'],
-    color: '#262626',
-    highlight: '#555555',
-    shadow: '#2c2c2c',
-    relief: 0.22,
-  });
-  tone(p, 0x1f02, '#4e4e4e', '#2b2b2b', { cell: 6, strength: 0.13, levels: 3 });
-  specks(p, 0x1f03, ['#525252', '#2f2f2f'], 10);
-};
-
-// ---------------------------------------------------------------------------
-// snow / ice / fluids
-// ---------------------------------------------------------------------------
-
-const snow: TilePainter = (p) => {
-  p.fill('#f2f5f8');
-  tone(p, 0x2001, '#ffffff', '#d9e2ea', { cell: 5, strength: 0.16, levels: 4 });
-  // soft blue-grey drifts keep the snow from reading as flat white
-  blobs(p, 0x2003, ['#e1e9f0', '#eef3f7'], 7, 1, 1);
-  p.rect(0, 0, T, 1, '#ffffff');
-  p.rect(0, T - 1, T, 1, '#dce4ec');
-  specks(p, 0x2002, ['#e4ecf2', '#ffffff'], 7);
-};
-
-const ice: TilePainter = (p) => {
-  const base = rgb(148, 194, 234, 222);
-  p.fill(base);
-  tone(p, 0x2101, rgb(212, 236, 250, 222), rgb(104, 152, 202, 222), { cell: 7, strength: 0.2, levels: 4 });
-  // frozen cracks, lighter than the body
-  const crack = rgb(226, 244, 252, 240);
-  const rng = mulberry32(0x2102);
-  for (let i = 0; i < 4; i++) {
-    let x = Math.floor(rng() * T);
-    let y = Math.floor(rng() * T);
-    const length = 4 + Math.floor(rng() * 6);
-    for (let s = 0; s < length; s++) {
-      p.set(wrap(x), wrap(y), crack);
-      x += rng() < 0.7 ? 1 : -1;
-      y += 1;
+function paintCobble(s: Sprite16, seed: number, mossy: boolean): void {
+  s.fill('#4A4A4A');
+  const tones = ['#8C8C8C', '#7D7D7D', '#979797', '#737373', '#868686', '#A0A0A0'];
+  const rng = mulberry32(seed);
+  const centers: Array<{ x: number; y: number; tone: string }> = [];
+  for (let gy = 0; gy < 3; gy++) {
+    for (let gx = 0; gx < 3; gx++) {
+      centers.push({
+        x: (gx + 0.2 + rng() * 0.6) * (16 / 3),
+        y: (gy + 0.2 + rng() * 0.6) * (16 / 3),
+        tone: tones[Math.floor(rng() * tones.length)],
+      });
     }
   }
-  specks(p, 0x2103, [rgb(236, 248, 255, 238), rgb(120, 168, 214, 226)], 10);
-};
-
-const water: TilePainter = (p) => {
-  p.fill(rgb(46, 102, 192, 208));
-  // depth mottling
-  tone(p, 0x2201, rgb(74, 136, 224, 208), rgb(30, 72, 156, 208), { cell: 6, strength: 0.3, levels: 5 });
-  // diagonal flow bands (stretched noise reads as a current, unlike per-pixel noise)
-  const angle = 0.52;
-  const ca = Math.cos(angle);
-  const sa = Math.sin(angle);
-  for (let y = 0; y < T; y++) {
-    for (let x = 0; x < T; x++) {
-      const u = x * ca + y * sa;
-      const v = -x * sa + y * ca;
-      const n = smoothNoise(0x2202, u, v * 2.6, 9);
-      if (n > 0.68) p.set(x, y, rgb(92, 152, 232, 212));
-      else if (n > 0.6) p.set(x, y, rgb(70, 128, 218, 210));
-      else if (n < 0.3) p.set(x, y, rgb(34, 80, 168, 210));
-      else if (n < 0.38) p.set(x, y, rgb(40, 90, 178, 210));
-    }
-  }
-  specks(p, 0x2203, [rgb(140, 190, 248, 216), rgb(58, 112, 204, 212)], 12);
-};
-
-const lava: TilePainter = (p) => {
-  // marbled heat bands instead of white noise
-  for (let y = 0; y < T; y++) {
-    for (let x = 0; x < T; x++) {
-      const n = fbm(0x2301, x, y, 7);
-      let color: Rgba;
-      if (n > 0.72) color = col('#ffd34d');
-      else if (n > 0.6) color = col('#f7a121');
-      else if (n > 0.47) color = col('#e06a12');
-      else if (n > 0.34) color = col('#b8430a');
-      else color = col('#8f2c05');
-      p.set(x, y, color);
-    }
-  }
-  // dark crust along some noise contours
-  for (let y = 0; y < T; y++) {
-    for (let x = 0; x < T; x++) {
-      const n = fbm(0x2301, x, y, 7);
-      if (Math.abs(n - 0.4) < 0.012) p.set(x, y, '#6e1e03');
-      else if (Math.abs(n - 0.665) < 0.01) p.set(x, y, '#ffb733');
-    }
-  }
-  blobs(p, 0x2302, ['#ffd34d', '#ffb733'], 5, 1, 1);
-  blobs(p, 0x2303, ['#7a2404', '#8f2c05'], 4, 1, 2);
-  specks(p, 0x2304, ['#ffe87a', '#ff9a1f', '#a83406'], 10);
-};
-
-// ---------------------------------------------------------------------------
-// logs
-// ---------------------------------------------------------------------------
-
-function logSideTile(
-  seed: number,
-  base: string,
-  light: string,
-  dark: string,
-  crevice: string,
-  cracks: number,
-): TilePainter {
-  return (p) => {
-    p.fill(base);
-    const rng = mulberry32(seed ^ 0x1a2b);
-    // vertical grain: runs of 2-4 px, each split into longer vertical segments
-    // so the bark reads as fibre instead of wall-paper stripes or noise
-    const tones = [base, base, base, light, dark];
-    let x = 0;
-    while (x < T) {
-      const run = 2 + Math.floor(rng() * 3);
-      let y = 0;
-      while (y < T) {
-        const segment = 3 + Math.floor(rng() * 8);
-        const color = tones[Math.floor(rng() * tones.length)];
-        for (let dx = 0; dx < run && x + dx < T; dx++) {
-          p.rect(x + dx, y, 1, segment, color);
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      let d1 = Number.POSITIVE_INFINITY;
+      let d2 = Number.POSITIVE_INFINITY;
+      let best = centers[0];
+      for (const c of centers) {
+        const d = Math.hypot(x + 0.5 - c.x, y + 0.5 - c.y);
+        if (d < d1) {
+          d2 = d1;
+          d1 = d;
+          best = c;
+        } else if (d < d2) {
+          d2 = d;
         }
-        y += segment;
       }
-      x += run;
-    }
-    // meandering deep crevices with a light ridge (vertical bark cracks)
-    for (let i = 0; i < cracks; i++) {
-      const startX = Math.floor(rng() * T);
-      const amplitude = 1 + Math.floor(rng() * 2);
-      const frequency = 0.1 + rng() * 0.12;
-      const phase = rng() * Math.PI * 2;
-      for (let y = 0; y < T; y++) {
-        const cx = wrap(startX + Math.round(Math.sin(y * frequency * Math.PI * 2 + phase) * amplitude));
-        p.set(cx, y, crevice);
-        p.set(wrap(cx + 1), y, light);
+      if (d2 - d1 < 1.05) {
+        s.set(x, y, '#4A4A4A');
+        continue;
       }
+      const facing = x + 0.5 - best.x + (y + 0.5 - best.y);
+      let color = best.tone;
+      if (facing < -1.7) color = '#A8A8A8';
+      else if (facing > 1.7) color = '#616161';
+      s.set(x, y, color);
     }
-    // horizontal bark plates
-    for (let i = 0; i < 5; i++) {
-      const x0 = Math.floor(rng() * T);
-      const y = Math.floor(rng() * T);
-      p.rect(x0, y, 2 + Math.floor(rng() * 4), 1, i % 2 === 0 ? dark : crevice);
+  }
+  s.speckle(seed ^ 0x20, ['#909090', '#6E6E6E'], 10);
+  if (mossy) {
+    const mossGreens = ['#5C7A3A', '#4C682E', '#6A8A44'];
+    const mossRng = mulberry32(seed ^ 0x1f2e);
+    for (let i = 0; i < 10; i++) {
+      const cx = Math.floor(mossRng() * 16);
+      const cy = Math.floor(mossRng() * 16);
+      const color = mossGreens[Math.floor(mossRng() * mossGreens.length)];
+      s.set(cx, cy, color);
+      s.set(cx + 1, cy, color);
+      if (mossRng() < 0.6) s.set(cx, cy + 1, color);
     }
-    // knots: dark oval with a lit rim
-    for (let k = 0; k < 2; k++) {
-      const kx = 4 + Math.floor(rng() * 24);
-      const ky = 5 + Math.floor(rng() * 22);
-      for (let dy = -2; dy <= 2; dy++) {
-        const w = dy === 0 ? 2 : 1;
-        for (let dx = -w; dx <= w; dx++) p.set(wrap(kx + dx), wrap(ky + dy), crevice);
-      }
-      p.set(wrap(kx), wrap(ky - 3), light);
-      p.set(wrap(kx + 2), wrap(ky + 1), light);
-    }
-    tone(p, seed ^ 0x81, light, dark, { cell: 10, strength: 0.06, levels: 2 });
-  };
+  }
 }
 
-const birchLog: TilePainter = (p) => {
-  p.fill('#d9d5c6');
-  tone(p, 0x2601, '#e9e5d8', '#bdb8a9', { cell: 7, strength: 0.15, levels: 4 });
-  // faint vertical grain
-  for (let x = 0; x < T; x++) {
-    const h = hash2f(0x2602, Math.floor(x / 2), 1);
-    if (h < 0.16) p.rect(x, 0, 1, T, '#c9c4b5');
-    else if (h > 0.9) p.rect(x, 0, 1, T, '#e8e4d7');
-  }
-  // horizontal lenticels (the signature birch marks)
-  const rng = mulberry32(0x2603);
-  for (let i = 0; i < 12; i++) {
-    const x = Math.floor(rng() * T);
-    const y = Math.floor(rng() * T);
-    const w = 2 + Math.floor(rng() * 4);
-    p.rect(x, y, w, 1, '#8f8a7d');
-    p.rect(x, y + 1, Math.max(1, w - 1), 1, '#a9a496');
-    p.set(x + w, y, '#c5c0b2');
-  }
-  // a few dark knots
-  const krng = mulberry32(0x2604);
-  for (let i = 0; i < 3; i++) {
-    const x = 4 + Math.floor(krng() * 24);
-    const y = 4 + Math.floor(krng() * 24);
-    p.rect(x, y, 3, 2, '#6f6a5e');
-    p.set(x, y + 2, '#918c80');
-  }
-  tone(p, 0x2605, '#e8e4d7', '#b0ab9c', { cell: 8, strength: 0.06, levels: 2 });
-};
-
-function logTopTile(
-  seed: number,
-  wood: string,
-  woodLight: string,
-  woodDark: string,
-  bark: string,
-  barkLight: string,
-  barkDark: string,
-): TilePainter {
-  return (p) => {
-    p.fill(wood);
-    const phase1 = hash2f(seed, 1, 2) * Math.PI * 2;
-    const phase2 = hash2f(seed, 3, 4) * Math.PI * 2;
-    const cx = 15.5;
-    const cy = 15.5;
-    for (let y = 0; y < T; y++) {
-      for (let x = 0; x < T; x++) {
-        const dx = x - cx;
-        const dy = y - cy;
-        const radius = Math.hypot(dx, dy);
-        const angle = Math.atan2(dy, dx);
-        // only a slight wobble: rings must stay circular (a 3-lobe wobble reads as a heart)
-        const wobble =
-          0.3 * Math.sin(angle * 2 + phase1) +
-          0.2 * Math.sin(angle * 5 + phase2) +
-          0.1 * Math.sin(angle * 9 + phase1 * 1.7);
-        const r = radius + wobble;
-        if (r > 14.4) {
-          const band = Math.floor((angle + Math.PI) * 5) % 2;
-          p.set(x, y, band === 0 ? bark : barkDark);
-          continue;
-        }
-        if (r > 13.1) {
-          p.set(x, y, barkLight);
-          continue;
-        }
-        const ring = Math.floor(r / 1.9);
-        let color = ring % 2 === 0 ? wood : woodDark;
-        if (ring === 0) color = woodDark;
-        p.set(x, y, color);
-      }
-    }
-    // radial drying cracks
-    const rng = mulberry32(seed ^ 0x7e33);
-    for (let i = 0; i < 3; i++) {
-      const angle = rng() * Math.PI * 2;
-      const length = 6 + Math.floor(rng() * 6);
-      for (let s = 3; s < length; s++) {
-        p.set(
-          Math.round(cx + Math.cos(angle + s * 0.04) * s),
-          Math.round(cy + Math.sin(angle + s * 0.04) * s),
-          woodDark,
-        );
-      }
-    }
-    tone(p, seed ^ 0x55, woodLight, woodDark, { cell: 9, strength: 0.06, levels: 3 });
-  };
-}
-
-const oakLog = logSideTile(0x2501, '#6f5430', '#7e623a', '#5a4024', '#42301b', 4);
-const oakLogTop = logTopTile(0x2502, '#ac8d5b', '#c0a06a', '#8c6f42', '#6f5430', '#7e623a', '#4a341f');
-const spruceLog = logSideTile(0x2701, '#4d3a26', '#5e4830', '#3a2a1a', '#2a1e11', 5);
-const spruceLogTop = logTopTile(0x2702, '#7a5f3a', '#8b6f45', '#5e4527', '#3f2d1b', '#4d3a26', '#2c2012');
-const birchLogTop = logTopTile(0x2606, '#d6cba9', '#e4dbba', '#b8ad8a', '#c2beb0', '#d4d0c2', '#a8a496');
-
-// ---------------------------------------------------------------------------
-// leaves (cutout: alpha holes with layered shading)
-// ---------------------------------------------------------------------------
-
-function leavesTile(
+function paintLeaves(
+  s: Sprite16,
   seed: number,
   deep: string,
   dark: string,
   base: string,
   light: string,
-): TilePainter {
-  return (p) => {
-    p.fill('rgba(0,0,0,0)');
-    const visible = new Uint8Array(T * T);
-    for (let y = 0; y < T; y++) {
-      for (let x = 0; x < T; x++) {
-        // clustered coverage: dense leaf masses plus a few bigger holes
-        visible[y * T + x] = fbm(seed, x, y, 4.2) > 0.33 ? 1 : 0;
-      }
+): void {
+  const rng = mulberry32(seed);
+  const tones = [deep, dark, base, base, base, light];
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      s.set(x, y, tones[Math.floor(rng() * tones.length)]);
     }
-    const rng = mulberry32(seed ^ 0x3311);
-    for (let i = 0; i < 3; i++) {
-      const hx = Math.floor(rng() * T);
-      const hy = Math.floor(rng() * T);
-      const hr = 1 + Math.floor(rng() * 2);
-      for (let dy = -hr; dy <= hr; dy++) {
-        for (let dx = -hr; dx <= hr; dx++) {
-          if (dx * dx + dy * dy > hr * hr) continue;
-          visible[wrap(hy + dy) * T + wrap(hx + dx)] = 0;
-        }
-      }
-    }
-    // clustered shading (narrow value range: leaf clumps, not camouflage)
-    for (let y = 0; y < T; y++) {
-      for (let x = 0; x < T; x++) {
-        if (!visible[y * T + x]) continue;
-        const shade = fbm(seed ^ 0x2f19, x, y, 3.2);
-        let color: Rgba;
-        if (shade < 0.3) color = col(deep);
-        else if (shade < 0.52) color = col(dark);
-        else if (shade < 0.86) color = col(base);
-        else color = col(light);
-        p.set(x, y, color);
-      }
-    }
-    // subtle rim light on the upper/left silhouette, deeper shade lower/right
-    for (let y = 0; y < T; y++) {
-      for (let x = 0; x < T; x++) {
-        if (!visible[y * T + x]) continue;
-        const up = y > 0 && visible[(y - 1) * T + x] === 1;
-        const left = x > 0 && visible[y * T + (x - 1)] === 1;
-        const down = y < T - 1 && visible[(y + 1) * T + x] === 1;
-        const right = x < T - 1 && visible[y * T + (x + 1)] === 1;
-        if (!up || !left) p.set(x, y, mixPixel(p.get(x, y), col(light), 0.4));
-        else if (!down || !right) p.set(x, y, mixPixel(p.get(x, y), col(deep), 0.42));
-      }
-    }
+  }
+  // clustered alpha holes (~12%): leaf masses with a few see-through gaps
+  const holeRng = mulberry32(seed ^ 0x3311);
+  const holes = new Uint8Array(16 * 16);
+  const erase = (x: number, y: number): void => {
+    const wx = ((x % 16) + 16) % 16;
+    const wy = ((y % 16) + 16) % 16;
+    holes[wy * 16 + wx] = 1;
+    s.set(wx, wy, 'rgba(0,0,0,0)');
   };
+  for (let c = 0; c < 5; c++) {
+    let hx = Math.floor(holeRng() * 16);
+    let hy = Math.floor(holeRng() * 16);
+    const size = 3 + Math.floor(holeRng() * 3);
+    for (let i = 0; i < size; i++) {
+      erase(hx, hy);
+      hx += Math.floor(holeRng() * 3) - 1;
+      hy += Math.floor(holeRng() * 3) - 1;
+    }
+  }
+  for (let i = 0; i < 6; i++) erase(Math.floor(holeRng() * 16), Math.floor(holeRng() * 16));
+  // rim light on the upper/left edge of each leaf cluster, shadow below/right
+  for (let y = 0; y < 16; y++) {
+    for (let x = 0; x < 16; x++) {
+      if (holes[y * 16 + x]) continue;
+      const up = y > 0 && holes[(y - 1) * 16 + x] === 1;
+      const left = x > 0 && holes[y * 16 + x - 1] === 1;
+      const down = y < 15 && holes[(y + 1) * 16 + x] === 1;
+      const right = x < 15 && holes[y * 16 + x + 1] === 1;
+      if (up || left) s.set(x, y, light);
+      else if (down || right) s.set(x, y, deep);
+    }
+  }
 }
 
-const oakLeaves = leavesTile(0x2801, '#2a4a1c', '#345a22', '#3f6b27', '#4b7a2f');
-const birchLeaves = leavesTile(0x2901, '#3a5c24', '#466b2b', '#537c31', '#628c3b');
-const spruceLeaves = leavesTile(0x2a01, '#1c3616', '#24421c', '#2c4f22', '#365c29');
+function paintPlanks(
+  s: Sprite16,
+  seed: number,
+  base: string,
+  light: string,
+  dark: string,
+  seam: string,
+): void {
+  const rng = mulberry32(seed);
+  for (let board = 0; board < 4; board++) {
+    const y0 = board * 4;
+    for (let y = y0; y < y0 + 4; y++) {
+      for (let x = 0; x < 16; x++) {
+        const roll = rng();
+        const color = roll < 0.12 ? light : roll < 0.26 ? dark : base;
+        s.set(x, y, color);
+      }
+    }
+    s.rect(0, y0, 16, 1, light);
+    s.rect(0, y0 + 3, 16, 1, seam);
+    const joint = 2 + Math.floor(rng() * 12);
+    s.rect(joint, y0, 1, 3, seam);
+    for (let i = 0; i < 2; i++) {
+      s.rect(1 + Math.floor(rng() * 13), y0 + 1 + Math.floor(rng() * 2), 2, 1, dark);
+    }
+  }
+}
 
-// ---------------------------------------------------------------------------
-// ores / obsidian
-// ---------------------------------------------------------------------------
-
-const oreStone = stoneTile(0x3001, '#7f7f7f', '#8d8d8d', '#6e6e6e');
+function paintStoneBricks(
+  s: Sprite16,
+  seed: number,
+  base: string,
+  light: string,
+  dark: string,
+  mortar: string,
+): void {
+  for (let y = 0; y < 16; y++) {
+    const row = Math.floor(y / 4);
+    const shift = (row % 2) * 4;
+    for (let x = 0; x < 16; x++) {
+      const xs = (x + shift) % 16;
+      if (y % 4 === 3 || xs % 8 === 7) {
+        s.set(x, y, mortar);
+        continue;
+      }
+      const brick = hash2i(seed, row * 2 + Math.floor(xs / 8), 5);
+      let color = brick % 2 === 0 ? base : light;
+      if (y % 4 === 0) color = light;
+      else if (y % 4 === 2) color = dark;
+      s.set(x, y, color);
+    }
+  }
+}
 
 function oreTile(
   seed: number,
@@ -571,544 +216,113 @@ function oreTile(
   oreDark: string,
   clusters = 6,
 ): TilePainter {
-  return (p) => {
-    oreStone(p);
+  return sprite16((s) => {
+    paintStone(s, 0x3001);
     const rng = mulberry32(seed);
-    // connected veins: grains step forward while overlapping, so the ore reads
-    // as chunky mineral clusters instead of scattered specks
     for (let c = 0; c < clusters; c++) {
-      let x = 3 + Math.floor(rng() * 26);
-      let y = 3 + Math.floor(rng() * 26);
-      const steps = 5 + Math.floor(rng() * 3);
-      for (let s = 0; s < steps; s++) {
-        const wide = rng() < 0.45;
-        // faceted grain: lit upper-left corner, shadowed lower-right corner
-        p.set(wrap(x), wrap(y), oreLight);
-        p.set(wrap(x + 1), wrap(y), oreMid);
-        p.set(wrap(x), wrap(y + 1), oreMid);
-        p.set(wrap(x + 1), wrap(y + 1), oreDark);
-        if (wide) {
-          p.set(wrap(x + 2), wrap(y), oreMid);
-          p.set(wrap(x + 2), wrap(y + 1), oreDark);
-          p.set(wrap(x + 1), wrap(y + 2), oreDark);
-        }
-        x = wrap(x + Math.floor(rng() * 3) - 1);
-        y = wrap(y + Math.floor(rng() * 3) - 1);
+      let x = 2 + Math.floor(rng() * 12);
+      let y = 2 + Math.floor(rng() * 12);
+      const steps = 2 + Math.floor(rng() * 2);
+      for (let step = 0; step < steps; step++) {
+        // small faceted mineral grain (1-2 logical px), like a chunky ore speck
+        s.set(x, y, oreLight);
+        s.set(x + 1, y, oreMid);
+        s.set(x, y + 1, oreDark);
+        if (rng() < 0.5) s.set(x + 1, y + 1, oreMid);
+        x = Math.max(1, Math.min(14, x + Math.floor(rng() * 3) - 1));
+        y = Math.max(1, Math.min(14, y + Math.floor(rng() * 3) - 1));
       }
     }
-    // a few isolated grains for texture
-    const rng2 = mulberry32(seed ^ 0x5bd1);
-    for (let i = 0; i < 3; i++) {
-      const x = 3 + Math.floor(rng2() * 26);
-      const y = 3 + Math.floor(rng2() * 26);
-      p.set(x, y, oreLight);
-      p.set(x + 1, y, oreMid);
-      p.set(x, y + 1, oreDark);
-    }
-    specks(p, seed ^ 0x70, [oreLight, oreMid], 5);
-  };
+    s.speckle(seed ^ 0x71, [oreLight, oreMid], 3);
+  });
 }
 
-const coalOre = oreTile(0x2b01, '#3a3a3a', '#262626', '#141414', 5);
-const copperOre = oreTile(0x2c01, '#e09a6a', '#c47a48', '#8f5228', 5);
-const ironOre = oreTile(0x2d01, '#e8d6be', '#c9ae90', '#9a7f64', 5);
-const goldOre = oreTile(0x2e01, '#ffe45e', '#e8c02e', '#b08a12', 5);
-const redstoneOre = oreTile(0x2f01, '#ff6a5a', '#d6372e', '#901a14', 6);
-const lapisOre = oreTile(0x3002, '#7a92ff', '#3f5fd6', '#24388f', 6);
-const diamondOre = oreTile(0x3101, '#a8fff7', '#5ce8dc', '#27a69b', 5);
-
-const obsidian: TilePainter = (p) => {
-  p.fill('#191024');
-  tone(p, 0x3201, '#2c1d42', '#0d0815', { cell: 5, strength: 0.26, levels: 4 });
-  blobs(p, 0x3202, ['#241833', '#2f1f45', '#1d1329'], 12, 1, 2);
-  // subtle glossy sheen patches (low contrast, no long scratches)
-  blobs(p, 0x3203, ['#33204d', '#3b2657'], 5, 1, 1);
-  specks(p, 0x3204, ['#4a3170', '#553a80', '#33204d'], 8);
-  // a couple of bright glints catch the light
-  p.set(9, 11, '#6d4d9c');
-  p.set(22, 21, '#5b3f8c');
-  p.set(20, 8, '#3f2a60');
-};
-
-// ---------------------------------------------------------------------------
-// wood products
-// ---------------------------------------------------------------------------
-
-function planksTile(
+function logSideTile(
   seed: number,
   base: string,
   light: string,
   dark: string,
-  seam: string,
-  grain: string,
+  crevice: string,
 ): TilePainter {
-  return (p) => {
-    p.fill(base);
+  return sprite16((s) => {
+    s.fill(base);
     const rng = mulberry32(seed);
-    for (let board = 0; board < 4; board++) {
-      const y0 = board * 8;
-      p.rect(0, y0, T, 1, light);
-      p.rect(0, y0 + 7, T, 1, seam);
-      const seamX = Math.floor(rng() * T);
-      p.rect(seamX, y0 + 1, 1, 6, seam);
-      const dashes = 2 + Math.floor(rng() * 3);
-      for (let d = 0; d < dashes; d++) {
-        const x = Math.floor(rng() * T);
-        const y = y0 + 2 + Math.floor(rng() * 5);
-        const length = 2 + Math.floor(rng() * 4);
-        p.rect(x, y, length, 1, rng() < 0.5 ? grain : light);
-      }
-      if (board % 2 === 1) {
-        const kx = 4 + Math.floor(rng() * 24);
-        p.set(kx, y0 + 4, seam);
-        p.set(kx + 1, y0 + 4, seam);
-        p.set(kx, y0 + 5, seam);
-        p.set(kx + 1, y0 + 3, light);
-      }
+    // vertical grain bands 1-2 cells wide
+    let x = 0;
+    while (x < 16) {
+      const width = 1 + Math.floor(rng() * 2);
+      const roll = rng();
+      const color = roll < 0.16 ? light : roll < 0.34 ? dark : base;
+      s.rect(x, 0, width, 16, color);
+      x += width;
     }
-    tone(p, seed ^ 0x37, light, dark, { cell: 8, strength: 0.08, levels: 3 });
-  };
+    // deep vertical bark cracks with a lit ridge
+    for (let i = 0; i < 3; i++) {
+      const cx = 1 + Math.floor(rng() * 14);
+      s.rect(cx, 0, 1, 16, crevice);
+      s.rect(cx + 1, 0, 1, 16, light);
+    }
+    // break up the full-height bands with bark plates + noise
+    s.speckle(seed ^ 0x111, [base, light, dark], 22);
+    for (let i = 0; i < 6; i++) {
+      s.rect(Math.floor(rng() * 15), Math.floor(rng() * 16), 1 + Math.floor(rng() * 2), 1, dark);
+    }
+    // knots: dark core + lit rim
+    for (let k = 0; k < 2; k++) {
+      const kx = 2 + Math.floor(rng() * 11);
+      const ky = 2 + Math.floor(rng() * 12);
+      s.rect(kx, ky, 2, 1, crevice);
+      s.rect(kx, ky + 1, 2, 1, dark);
+      s.set(kx, ky - 1, light);
+      s.set(kx + 2, ky, light);
+    }
+  });
 }
 
-const oakPlanks = planksTile(0x3301, '#b58b52', '#c9a267', '#8d6a3c', '#6f5230', '#a07846');
-const birchPlanks = planksTile(0x3401, '#d7cdb0', '#e6ddc4', '#b3a888', '#918770', '#c8bda0');
-const sprucePlanks = planksTile(0x3501, '#7a5a38', '#8e6c45', '#5c4228', '#4a3420', '#6a4d2f');
-
-// ---------------------------------------------------------------------------
-// masonry
-// ---------------------------------------------------------------------------
-
-function stoneBricksTile(
+function logTopTile(
   seed: number,
-  base: string,
+  wood: string,
   light: string,
   dark: string,
-  mortar: string,
+  bark: string,
+  barkDark: string,
 ): TilePainter {
-  return (p) => {
-    const rowHeight = 16;
-    const baseColor = col(base);
-    const lightColor = col(light);
-    const darkColor = col(dark);
-    const mortarColor = col(mortar);
-    for (let y = 0; y < T; y++) {
-      const row = Math.floor(y / rowHeight);
-      const shift = row % 2 === 0 ? 0 : 8;
-      for (let x = 0; x < T; x++) {
-        const xs = (x + shift) % T;
-        const brickId = row * 2 + Math.floor(xs / 16);
-        let color: Rgba;
-        if (y % rowHeight < 2 || xs % 16 < 2) {
-          color = mortarColor;
-        } else {
-          const variation = hash2f(seed, brickId, 5);
-          color = mixPixel(baseColor, variation < 0.5 ? lightColor : darkColor, Math.abs(variation - 0.5) * 0.42);
-          if (y % rowHeight === 2) color = mixPixel(color, lightColor, 0.5);
-          else if (y % rowHeight === rowHeight - 1) color = mixPixel(color, darkColor, 0.5);
+  return sprite16((s) => {
+    const cx = 7.5;
+    const cy = 7.5;
+    const phase = (hash2i(seed, 1, 2) % 628) / 100;
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        const dx = x - cx;
+        const dy = y - cy;
+        const angle = Math.atan2(dy, dx);
+        const r = Math.hypot(dx, dy) + 0.3 * Math.sin(angle * 4 + phase);
+        if (r > 6.8) {
+          const band = Math.floor((angle + Math.PI) * 3) % 2;
+          s.set(x, y, band === 0 ? bark : barkDark);
+          continue;
         }
-        p.set(x, y, color);
-      }
-    }
-    tone(p, seed ^ 0x517, light, dark, { cell: 9, strength: 0.08, levels: 3 });
-    specks(p, seed ^ 0x518, [light, dark], 10);
-  };
-}
-
-const stoneBricks = stoneBricksTile(0x3601, '#7d7d7d', '#8f8f8f', '#686868', '#5a5a5a');
-const furnaceSide = stoneBricksTile(0x3f01, '#7a7a7a', '#8a8a8a', '#666666', '#545454');
-
-const bricks: TilePainter = (p) => {
-  const mortar = col('#c8bba7');
-  const brickColors = palette(['#a54c3c', '#b0543f', '#984438', '#ad5142', '#9c4737']);
-  const lightBrick = col('#c46a52');
-  const darkBrick = col('#7f3226');
-  const rowHeight = 8;
-  for (let y = 0; y < T; y++) {
-    const row = Math.floor(y / rowHeight);
-    const shift = (row % 2) * 8;
-    for (let x = 0; x < T; x++) {
-      const xs = (x + shift) % T;
-      let color: Rgba;
-      if (y % rowHeight < 2 || xs % 16 < 2) {
-        color = mortar;
-      } else {
-        const brickId = row * 2 + Math.floor(xs / 16);
-        color = brickColors[hash2i(0x3801, brickId, 7) % brickColors.length];
-        color = mixPixel(color, hash2f(0x3802, brickId, 9) < 0.5 ? darkBrick : lightBrick, hash2f(0x3803, brickId, 11) * 0.2);
-        if (y % rowHeight === 2) color = mixPixel(color, lightBrick, 0.5);
-        else if (y % rowHeight === rowHeight - 1) color = mixPixel(color, darkBrick, 0.5);
-      }
-      p.set(x, y, color);
-    }
-  }
-  tone(p, 0x3804, '#b6604a', '#83362a', { cell: 8, strength: 0.07, levels: 3 });
-  specks(p, 0x3805, ['#c1624b', '#8d3a2d'], 8);
-};
-
-const glass: TilePainter = (p) => {
-  p.fill('rgba(0,0,0,0)');
-  const frame = rgb(196, 228, 240, 255);
-  const frameShade = rgb(150, 196, 216, 255);
-  const shine = rgb(235, 250, 255, 255);
-  p.rect(0, 0, T, 2, frame);
-  p.rect(0, T - 2, T, 2, frame);
-  p.rect(0, 0, 2, T, frame);
-  p.rect(T - 2, 0, 2, T, frame);
-  // inner bevel + diagonal glints
-  p.rect(2, 2, T - 4, 1, frameShade);
-  p.rect(2, 2, 1, T - 4, frameShade);
-  p.line(6, 24, 20, 10, shine);
-  p.line(7, 25, 21, 11, shine);
-  p.line(17, 27, 27, 17, frame);
-  p.set(4, 5, shine);
-  p.set(5, 4, shine);
-  p.set(26, 26, shine);
-};
-
-// ---------------------------------------------------------------------------
-// wool
-// ---------------------------------------------------------------------------
-
-function woolTile(seed: number, base: string, light: string, dark: string): TilePainter {
-  return (p) => {
-    p.fill(base);
-    tone(p, seed, light, dark, { cell: 5, strength: 0.12, levels: 3 });
-    // short fuzzy fibres, low contrast
-    const rng = mulberry32(seed ^ 0x5a);
-    for (let i = 0; i < 24; i++) {
-      const x = Math.floor(rng() * T);
-      const y = Math.floor(rng() * T);
-      const color = rng() < 0.5 ? light : dark;
-      p.set(x, y, color);
-      if (rng() < 0.4) p.set(wrap(x + 1), y, color);
-      if (rng() < 0.25) p.set(x, wrap(y + 1), color);
-    }
-  };
-}
-
-const woolWhite = woolTile(0x3901, '#e6e6e6', '#f2f2f2', '#cfcfcf');
-const woolRed = woolTile(0x3a01, '#b83a3a', '#c94c4c', '#9c2d2d');
-const woolYellow = woolTile(0x3b01, '#e0c040', '#efd45c', '#c4a52c');
-const woolBlue = woolTile(0x3c01, '#3a4ab8', '#4c5ccc', '#2d3a96');
-const woolBlack = woolTile(0x3d01, '#2a2a2a', '#383838', '#1d1d1d');
-
-// ---------------------------------------------------------------------------
-// crafting table
-// ---------------------------------------------------------------------------
-
-const craftingTableTop: TilePainter = (p) => {
-  oakPlanks(p);
-  // wooden frame
-  p.rect(0, 0, T, 2, '#6a4a24');
-  p.rect(0, T - 2, T, 2, '#6a4a24');
-  p.rect(0, 0, 2, T, '#6a4a24');
-  p.rect(T - 2, 0, 2, T, '#6a4a24');
-  p.rect(2, 2, T - 4, 1, '#8d6a3c');
-  // 3x3 recessed grid
-  for (let gy = 0; gy < 3; gy++) {
-    for (let gx = 0; gx < 3; gx++) {
-      const x = 5 + gx * 8;
-      const y = 5 + gy * 8;
-      p.rect(x, y, 6, 6, '#7d5a30');
-      p.rect(x + 1, y + 1, 4, 4, '#a9824a');
-      p.set(x + 1, y + 1, '#c9a267');
-      p.set(x + 4, y + 4, '#8d6a3c');
-    }
-  }
-};
-
-const craftingTableSide: TilePainter = (p) => {
-  oakPlanks(p);
-  p.rect(0, 0, T, 1, '#6a4a24');
-  p.rect(0, T - 1, T, 1, '#6a4a24');
-  p.rect(0, 13, T, 2, '#6a4a24');
-  p.rect(0, 13, T, 1, '#8d6a3c');
-  // saw silhouette
-  p.rect(4, 5, 14, 3, '#b8b8b8');
-  p.rect(4, 5, 14, 1, '#e0e0e0');
-  for (let i = 0; i < 7; i++) p.set(5 + i * 2, 8, '#d8d8d8');
-  p.rect(18, 4, 4, 5, '#7a5a30');
-  p.rect(18, 4, 4, 1, '#966f3e');
-  // hammer silhouette
-  p.rect(8, 18, 4, 10, '#8d6a3c');
-  p.rect(8, 18, 1, 10, '#a9824a');
-  p.rect(4, 17, 12, 4, '#a0a0a0');
-  p.rect(4, 17, 12, 1, '#d0d0d0');
-  p.rect(4, 20, 12, 1, '#7a7a7a');
-  specks(p, 0x7101, ['#c9a267', '#8d6a3c'], 8);
-};
-
-const craftingTableFront: TilePainter = (p) => {
-  oakPlanks(p);
-  p.rect(0, 0, T, 1, '#6a4a24');
-  p.rect(0, T - 1, T, 1, '#6a4a24');
-  // recessed panel
-  p.rect(4, 4, T - 8, T - 8, '#6a4a24');
-  p.rect(5, 5, T - 10, T - 10, '#a9824a');
-  p.rect(5, 5, T - 10, 1, '#c9a267');
-  p.rect(13, 6, 2, 20, '#8d6a3c');
-  p.rect(6, 13, 20, 2, '#8d6a3c');
-  p.rect(17, 7, 6, 3, '#b8b8b8');
-  p.rect(17, 7, 6, 1, '#e0e0e0');
-};
-
-// ---------------------------------------------------------------------------
-// furnace
-// ---------------------------------------------------------------------------
-
-const furnaceTop: TilePainter = (p) => {
-  p.fill('#7c7c7c');
-  tone(p, 0x3e01, '#8a8a8a', '#6a6a6a', { cell: 7, strength: 0.14, levels: 3 });
-  p.rect(0, 0, T, 2, '#5f5f5f');
-  p.rect(0, T - 2, T, 2, '#5f5f5f');
-  p.rect(0, 0, 2, T, '#5f5f5f');
-  p.rect(T - 2, 0, 2, T, '#5f5f5f');
-  // chimney / vent opening
-  p.rect(10, 10, 12, 12, '#3a3a3a');
-  p.rect(11, 11, 10, 10, '#2b2b2b');
-  p.rect(12, 12, 8, 8, '#1c1c1c');
-  p.set(11, 11, '#585858');
-  for (let i = 0; i < 3; i++) p.rect(13, 13 + i * 3, 6, 1, '#3a3a3a');
-  specks(p, 0x3e02, ['#888888', '#6a6a6a'], 8);
-};
-
-function furnaceFrontTile(lit: boolean): TilePainter {
-  return (p) => {
-    furnaceSide(p);
-    // stone surround
-    p.rect(6, 6, 20, 3, '#8f8f8f');
-    p.rect(6, 6, 1, 22, '#8a8a8a');
-    p.rect(25, 6, 1, 22, '#6d6d6d');
-    p.rect(6, 27, 20, 2, '#666666');
-    if (lit) {
-      // warm glow on the stone around the mouth
-      for (let y = 5; y < 30; y++) {
-        for (let x = 4; x < 28; x++) {
-          if (x >= 8 && x <= 23 && y >= 11 && y <= 27) continue;
-          const dx = Math.max(0, Math.max(8 - x, x - 23));
-          const dy = Math.max(0, Math.max(11 - y, y - 27));
-          const distance = Math.hypot(dx, dy);
-          if (distance > 0 && distance <= 2.5) p.set(x, y, mixPixel(p.get(x, y), col('#ff8a2a'), 0.28));
+        if (r > 6.2) {
+          s.set(x, y, dark);
+          continue;
         }
+        const ring = Math.floor(r / 1.3);
+        let color = ring % 2 === 0 ? wood : dark;
+        if (ring === 0) color = dark;
+        if (ring === 2) color = light;
+        s.set(x, y, color);
       }
     }
-    // mouth
-    p.rect(8, 11, 16, 17, '#2a2a2a');
-    p.rect(9, 12, 14, 15, lit ? '#1a1210' : '#1b1b1b');
-    if (lit) {
-      p.rect(9, 25, 14, 2, '#d8641a');
-      for (let x = 9; x < 23; x++) {
-        const heat = fbm(0x3f05, x, 0, 4);
-        const height = 3 + Math.floor(heat * 7);
-        const top = 25 - height;
-        for (let y = top; y < 26; y++) {
-          const t = (y - top) / Math.max(1, 26 - top);
-          const color = t < 0.3 ? '#ffe89a' : t < 0.62 ? '#ffc040' : '#f07a18';
-          p.set(x, y, color);
-        }
+    const rng = mulberry32(seed ^ 0x7e33);
+    for (let i = 0; i < 3; i++) {
+      const angle = rng() * Math.PI * 2;
+      for (let r = 2; r < 6; r++) {
+        s.set(Math.round(cx + Math.cos(angle) * r), Math.round(cy + Math.sin(angle) * r), dark);
       }
-      p.rect(12, 20, 8, 4, '#ffd85e');
-      p.rect(14, 18, 4, 3, '#ffe89a');
-      specks(p, 0x3f06, ['#fff0b0', '#ff9a2a'], 6);
-    } else {
-      p.rect(9, 24, 14, 3, '#141414');
-      p.rect(10, 23, 12, 2, '#3a2a20');
-      p.rect(15, 22, 2, 2, '#241812');
     }
-    // lintel highlight
-    p.rect(6, 6, 20, 1, '#9a9a9a');
-  };
+    s.speckle(seed ^ 0x81, [wood, light, dark], 16);
+  });
 }
-
-const furnaceFront = furnaceFrontTile(false);
-const furnaceFrontLit = furnaceFrontTile(true);
-
-// ---------------------------------------------------------------------------
-// chest
-// ---------------------------------------------------------------------------
-
-const CHEST_BASE = '#a87b42';
-const CHEST_LIGHT = '#bd8f52';
-const CHEST_DARK = '#85582c';
-const CHEST_SEAM = '#6b4520';
-
-function chestPanel(p: PixelPainter, seed: number): void {
-  p.fill(CHEST_BASE);
-  tone(p, seed, CHEST_LIGHT, CHEST_DARK, { cell: 6, strength: 0.16, levels: 4 });
-  p.rect(0, 10, T, 1, CHEST_DARK);
-  p.rect(0, 21, T, 1, CHEST_DARK);
-  const rng = mulberry32(seed ^ 0x3a);
-  for (let i = 0; i < 9; i++) {
-    const x = Math.floor(rng() * T);
-    const y = Math.floor(rng() * T);
-    p.rect(x, y, 2 + Math.floor(rng() * 3), 1, rng() < 0.5 ? '#96682f' : '#b98a4c');
-  }
-}
-
-const chestTop: TilePainter = (p) => {
-  chestPanel(p, 0x3b01);
-  // lid frame
-  p.rect(0, 0, T, 2, CHEST_SEAM);
-  p.rect(0, T - 2, T, 2, CHEST_SEAM);
-  p.rect(0, 0, 2, T, CHEST_SEAM);
-  p.rect(T - 2, 0, 2, T, CHEST_SEAM);
-  p.rect(2, 2, T - 4, 1, CHEST_LIGHT);
-  // lock plate on the lid edge
-  p.rect(13, 25, 6, 6, '#8a8a8a');
-  p.rect(14, 26, 4, 4, '#b0b0b0');
-  p.rect(15, 27, 2, 2, '#e0c060');
-};
-
-const chestSide: TilePainter = (p) => {
-  chestPanel(p, 0x3b02);
-  p.rect(0, 0, T, 2, CHEST_SEAM);
-  p.rect(0, T - 2, T, 2, CHEST_SEAM);
-  p.rect(0, 0, 2, T, CHEST_SEAM);
-  p.rect(T - 2, 0, 2, T, CHEST_SEAM);
-  // lid seam
-  p.rect(0, 14, T, 2, CHEST_SEAM);
-  p.rect(0, 13, T, 1, CHEST_LIGHT);
-  // iron hinges
-  p.rect(4, 2, 4, 4, '#7a7a7a');
-  p.rect(4, 2, 4, 1, '#a0a0a0');
-  p.rect(24, 2, 4, 4, '#7a7a7a');
-  p.rect(24, 2, 4, 1, '#a0a0a0');
-};
-
-const chestFront: TilePainter = (p) => {
-  chestPanel(p, 0x3b03);
-  p.rect(0, 0, T, 2, CHEST_SEAM);
-  p.rect(0, T - 2, T, 2, CHEST_SEAM);
-  p.rect(0, 0, 2, T, CHEST_SEAM);
-  p.rect(T - 2, 0, 2, T, CHEST_SEAM);
-  p.rect(0, 14, T, 2, CHEST_SEAM);
-  p.rect(0, 13, T, 1, CHEST_LIGHT);
-  // central lock
-  p.rect(12, 11, 8, 9, '#7a7a7a');
-  p.rect(13, 12, 6, 8, '#a8a8a8');
-  p.rect(13, 12, 6, 1, '#d0d0d0');
-  p.rect(14, 13, 4, 4, '#e0c060');
-  p.rect(15, 14, 2, 2, '#5a4212');
-  p.set(15, 17, '#8a6a1a');
-  p.set(16, 17, '#8a6a1a');
-};
-
-// ---------------------------------------------------------------------------
-// torch / TNT
-// ---------------------------------------------------------------------------
-
-const torch: TilePainter = (p) => {
-  p.fill('rgba(0,0,0,0)');
-  // stick
-  p.rect(13, 13, 6, 19, '#7a5630');
-  p.rect(13, 13, 1, 19, '#4a3018');
-  p.rect(18, 13, 1, 19, '#4a3018');
-  p.rect(14, 13, 2, 19, '#93683a');
-  p.rect(13, 30, 6, 2, '#4a3018');
-  // ember / coal head
-  p.rect(12, 10, 8, 4, '#3a2a18');
-  p.rect(13, 9, 6, 2, '#5a3a1e');
-  // flame: teardrop with a hot core
-  for (let y = 1; y <= 10; y++) {
-    const half = Math.round(4 - Math.abs(y - 6) * 0.42);
-    const width = Math.max(1, half);
-    for (let dx = -width; dx <= width; dx++) p.set(16 + dx, y, '#ff8a1e');
-    if (width > 1) {
-      for (let dx = -width + 1; dx <= width - 1; dx++) p.set(16 + dx, y, '#ffc44a');
-    }
-    if (width > 2 && y >= 5 && y <= 8) {
-      for (let dx = -2; dx <= 2; dx++) p.set(16 + dx, y, '#fff0b0');
-    }
-  }
-  // embers around the flame
-  p.set(11, 6, '#ffb347');
-  p.set(21, 5, '#ffb347');
-  p.set(10, 9, '#e0701a');
-  p.set(22, 9, '#e0701a');
-  p.set(16, 0, '#ffd97a');
-};
-
-const tntSide: TilePainter = (p) => {
-  p.fill('#c4392c');
-  tone(p, 0x3101, '#d64a38', '#a72a20', { cell: 6, strength: 0.14, levels: 3 });
-  for (let x = 0; x < T; x += 8) p.rect(x, 0, 1, 10, '#a52a20');
-  // white label band with the classic stencilled letters (original glyphs)
-  p.rect(0, 10, T, 12, '#e8e2d8');
-  p.rect(0, 10, T, 1, '#c8c2b8');
-  p.rect(0, 21, T, 1, '#c8c2b8');
-  const ink = col('#3a2a20');
-  stampGlyph(p, GLYPHS.T, 4, 12, ink);
-  stampGlyph(p, GLYPHS.N, 13, 12, ink);
-  stampGlyph(p, GLYPHS.T, 22, 12, ink);
-  // strap shadows above and below the band
-  const rng = mulberry32(0x3102);
-  for (let i = 0; i < 6; i++) {
-    const x = Math.floor(rng() * T);
-    const y = Math.floor(rng() * T);
-    p.rect(x, y, 2 + Math.floor(rng() * 4), 1, rng() < 0.5 ? '#b03024' : '#d9503c');
-  }
-  specks(p, 0x3103, ['#e05a46', '#9c241a'], 8);
-};
-
-const tntTop: TilePainter = (p) => {
-  p.fill('#c4392c');
-  tone(p, 0x3111, '#d64a38', '#a72a20', { cell: 6, strength: 0.14, levels: 3 });
-  p.rect(0, 0, T, 1, '#a52a20');
-  p.rect(0, T - 1, T, 1, '#a52a20');
-  // fuse hole
-  p.rect(13, 13, 6, 6, '#4a3a30');
-  p.rect(14, 14, 4, 4, '#241a14');
-  p.rect(15, 15, 2, 2, '#0e0a08');
-  // fuse
-  p.line(16, 13, 21, 7, '#6a4a2a');
-  p.line(21, 7, 25, 8, '#6a4a2a');
-  p.set(25, 7, '#8a6a3a');
-  p.set(22, 6, '#8a6a3a');
-  specks(p, 0x3112, ['#e05a46', '#9c241a'], 8);
-};
-
-const tntBottom: TilePainter = (p) => {
-  p.fill('#8a2c20');
-  tone(p, 0x3121, '#a83a2c', '#6f1f18', { cell: 6, strength: 0.16, levels: 3 });
-  p.rect(0, 0, T, 1, '#6a1a14');
-  p.rect(0, T - 1, T, 1, '#6a1a14');
-  specks(p, 0x3122, ['#a83a2c', '#5f1812'], 10);
-};
-
-// ---------------------------------------------------------------------------
-// bookshelf / mineral blocks
-// ---------------------------------------------------------------------------
-
-const BOOK_COLORS = palette(['#a83a34', '#34589c', '#3f7a3c', '#b08a2e', '#8a4a8a', '#c8c0a8', '#7a4a2a']);
-
-const bookshelf: TilePainter = (p) => {
-  oakPlanks(p);
-  p.rect(0, 0, T, 2, '#8d6a3c');
-  p.rect(0, 0, T, 1, '#c9a267');
-  p.rect(0, T - 2, T, 2, '#8d6a3c');
-  p.rect(0, T - 2, T, 1, '#6f5230');
-  const rows: readonly (readonly [number, number])[] = [
-    [2, 13],
-    [17, 28],
-  ];
-  for (const [top, bottom] of rows) {
-    p.rect(0, bottom, T, 2, '#6a4a24');
-    p.rect(0, bottom, T, 1, '#8d6a3c');
-    const rng = mulberry32(0x43 ^ top);
-    let x = 1;
-    while (x < T - 2) {
-      const width = 1 + Math.floor(rng() * 3);
-      const height = bottom - top - Math.floor(rng() * 3);
-      const color = BOOK_COLORS[Math.floor(rng() * BOOK_COLORS.length)];
-      const y = bottom - height;
-      p.rect(x, y, width, height, color);
-      p.rect(x, y, width, 1, mixPixel(color, col('#e8e0c8'), 0.42));
-      p.rect(x + width - 1, y, 1, height, mixPixel(color, col('#1a1208'), 0.35));
-      if (width >= 2 && rng() < 0.5) p.set(x, y + 2, '#d8c890');
-      x += width + 1;
-    }
-  }
-};
 
 function mineralBlockTile(
   seed: number,
@@ -1117,251 +331,95 @@ function mineralBlockTile(
   dark: string,
   glint: string,
 ): TilePainter {
-  return (p) => {
-    p.fill(base);
-    tone(p, seed, light, dark, { cell: 8, strength: 0.12, levels: 3 });
-    const origins: readonly (readonly [number, number])[] = [
+  return sprite16((s) => {
+    s.fill(base);
+    s.noise(seed, [base, base, light, dark], [5, 2, 1, 1]);
+    // outer bevel
+    s.rect(0, 0, 16, 1, light);
+    s.rect(0, 0, 1, 16, light);
+    s.rect(0, 15, 16, 1, dark);
+    s.rect(15, 0, 1, 16, dark);
+    // 2x2 ingot facets with a lit corner
+    const cells: ReadonlyArray<readonly [number, number]> = [
       [2, 2],
-      [17, 2],
-      [2, 17],
-      [17, 17],
+      [9, 2],
+      [2, 9],
+      [9, 9],
     ];
-    origins.forEach(([ox, oy], index) => {
-      const vary = hash2f(seed, index, 3) * 0.14;
-      const face = mixPixel(col(base), hash2f(seed, index, 4) < 0.5 ? col(light) : col(dark), vary);
-      p.rect(ox, oy, 13, 13, face);
-      p.rect(ox, oy, 13, 1, light);
-      p.rect(ox, oy, 1, 13, light);
-      p.rect(ox, oy + 12, 13, 1, dark);
-      p.rect(ox + 12, oy, 1, 13, dark);
-      p.rect(ox + 1, oy + 1, 11, 1, mixPixel(face, col(light), 0.45));
-      p.rect(ox + 1, oy + 11, 11, 1, mixPixel(face, col(dark), 0.5));
-      // ingot glint
-      p.set(ox + 2, oy + 2, glint);
-      p.set(ox + 3, oy + 2, glint);
-      p.set(ox + 2, oy + 3, glint);
-      p.set(ox + 10, oy + 10, mixPixel(face, col(dark), 0.6));
-    });
-    bevel(p, light, dark, 1);
-    specks(p, seed ^ 0x91, [light, dark], 6);
-  };
+    for (const [ox, oy] of cells) {
+      s.rect(ox, oy, 5, 5, base);
+      s.rect(ox, oy, 5, 1, light);
+      s.rect(ox, oy, 1, 5, light);
+      s.rect(ox, oy + 4, 5, 1, dark);
+      s.rect(ox + 4, oy, 1, 5, dark);
+      s.set(ox + 1, oy + 1, glint);
+      s.set(ox + 2, oy + 1, glint);
+      s.set(ox + 1, oy + 2, glint);
+    }
+  });
 }
 
-const coalBlock = mineralBlockTile(0x4401, '#262626', '#3c3c3c', '#121212', '#555555');
-const ironBlock = mineralBlockTile(0x4501, '#c8c8c8', '#e4e4e4', '#9a9a9a', '#f8f8f8');
-const goldBlock = mineralBlockTile(0x4601, '#f0cc3c', '#ffe868', '#c09818', '#fff4a8');
-const diamondBlock = mineralBlockTile(0x4701, '#52e0d4', '#9cfff6', '#2a9a92', '#e0fff9');
-const lapisBlock = mineralBlockTile(0x4801, '#3a54c8', '#5a74ec', '#22378f', '#8aa2ff');
-const redstoneBlock = mineralBlockTile(0x4901, '#b8342a', '#e05040', '#7f1c16', '#ff7060');
-
-// ---------------------------------------------------------------------------
-// cactus / plants
-// ---------------------------------------------------------------------------
-
-const cactusTop: TilePainter = (p) => {
-  p.fill('#4c7a2a');
-  tone(p, 0x4a01, '#5c8c33', '#3a5f20', { cell: 6, strength: 0.18, levels: 4 });
-  p.rect(0, 0, T, 2, '#3a5f20');
-  p.rect(0, T - 2, T, 2, '#3a5f20');
-  p.rect(0, 0, 2, T, '#3a5f20');
-  p.rect(T - 2, 0, 2, T, '#3a5f20');
-  p.rect(2, 2, 1, T - 4, '#5c8c33');
-  p.rect(2, 2, T - 4, 1, '#5c8c33');
-  // lighter flesh
-  p.rect(9, 9, 14, 14, '#5c8c33');
-  p.rect(10, 10, 12, 12, '#6a9a3e');
-  p.rect(11, 11, 10, 10, '#78a84a');
-  // spine dots at the four corners
-  const spines: readonly (readonly [number, number])[] = [
-    [6, 6],
-    [25, 6],
-    [6, 25],
-    [25, 25],
-  ];
-  for (const [sx, sy] of spines) {
-    p.set(sx, sy, '#d8e6a8');
-    p.set(sx + 1, sy, '#b8cf88');
-    p.set(sx, sy + 1, '#b8cf88');
-  }
-};
-
-const cactusSide: TilePainter = (p) => {
-  p.fill('#4c7a2a');
-  tone(p, 0x4a02, '#5c8c33', '#3a5f20', { cell: 7, strength: 0.16, levels: 3 });
-  // dark side ridges with a lighter inner edge
-  p.rect(0, 0, 3, T, '#3a5f20');
-  p.rect(3, 0, 1, T, '#5c8c33');
-  p.rect(T - 3, 0, 3, T, '#3a5f20');
-  p.rect(T - 4, 0, 1, T, '#5c8c33');
-  // central rib
-  p.rect(15, 0, 2, T, '#5c8c33');
-  p.rect(15, 0, 1, T, '#6a9a3e');
-  // spines
-  for (let y = 2; y < T; y += 5) {
-    p.set(8, y, '#d8e6a8');
-    p.set(9, y, '#a8c878');
-    p.set(23, y + 2, '#d8e6a8');
-    p.set(22, y + 2, '#a8c878');
-    p.set(16, y + 4, '#a8c878');
-    p.set(11, y + 1, '#6a9a3e');
-    p.set(20, y + 3, '#6a9a3e');
-  }
-  specks(p, 0x4a03, ['#5c8c33', '#3a5f20'], 8);
-};
-
-const sugarCane: TilePainter = (p) => {
-  p.fill('rgba(0,0,0,0)');
-  const stalks: readonly (readonly [number, number, number])[] = [
-    [5, 0, 2],
-    [14, 3, 5],
-    [23, 1, 3],
-  ];
-  for (const [sx, sy, width] of stalks) {
-    const top = sy;
-    for (let y = top; y < T; y++) {
-      for (let dx = 0; dx < width; dx++) {
-        let color = '#7fb04a';
-        if (dx === 0) color = '#65933a';
-        else if (dx === width - 1) color = '#96c25c';
-        p.set(sx + dx, y, color);
-      }
-      // nodes
-      if ((y - top) % 7 === 3) {
-        p.rect(sx - 1, y, width + 2, 1, '#5c8834');
-        p.set(sx, y - 1, '#a8d070');
+function tallGrassTile(): TilePainter {
+  return sprite16((s) => {
+    const tufts = [3, 8, 13];
+    const palette = ['#6DA84A', '#79C05A', '#5D8F3C', '#8FBF5A'];
+    const rng = mulberry32(0x6001);
+    for (const baseX of tufts) {
+      for (let i = 0; i < 4; i++) {
+        const x0 = Math.min(14, Math.max(1, baseX + i - 1));
+        const height = 6 + Math.floor(rng() * 6);
+        const lean = Math.floor(rng() * 3) - 1;
+        const color = palette[Math.floor(rng() * palette.length)];
+        for (let h = 0; h < height; h++) {
+          const t = h / Math.max(1, height - 1);
+          const x = Math.min(15, Math.max(0, x0 + Math.round(lean * t * t)));
+          const y = 15 - h;
+          s.set(x, y, h === height - 1 ? '#8FBF5A' : color);
+          // 2 px wide base, 1 px tips
+          if (h < Math.ceil(height * 0.4)) s.set(Math.min(15, x + 1), y, color);
+        }
+        s.set(Math.min(15, x0 + 1), 15, '#5D8F3C');
       }
     }
-    // leaf blades at the top
-    p.line(sx, top + 1, sx - 3, top - 2, '#6a9a3c');
-    p.line(sx + width - 1, top + 2, sx + width + 2, top - 1, '#79a848');
-    p.line(sx + 1, top, sx + 2, top - 3, '#8ab856');
-  }
-  // one angled blade lower down
-  p.line(11, 18, 8, 13, '#7fb04a');
-  p.line(12, 17, 10, 12, '#65933a');
-};
-
-const tallGrass: TilePainter = (p) => {
-  p.fill('rgba(0,0,0,0)');
-  const blades = 10;
-  for (let i = 0; i < blades; i++) {
-    const baseX = 3 + i * 3 + (hash2i(0x6002, i, 0) % 2);
-    const height = 10 + (hash2i(0x6003, i, 1) % 13);
-    const lean = (hash2i(0x6004, i, 2) % 5) - 2;
-    const color = i % 3 === 0 ? '#5c8c33' : i % 3 === 1 ? '#6a9e3f' : '#4e7a2b';
-    for (let s = 0; s < height; s++) {
-      const t = s / height;
-      const x = baseX + Math.round(lean * t * t);
-      const y = T - 1 - s;
-      p.set(x, y, color);
-      if (s > height * 0.55 && s % 3 === 0) p.set(x + 1, y, '#7cae4d');
-    }
-    p.set(baseX + Math.round(lean), T - height, '#86b95a');
-  }
-};
-
-function flowerTile(kind: 'poppy' | 'dandelion'): TilePainter {
-  return (p) => {
-    p.fill('rgba(0,0,0,0)');
-    const stem = kind === 'poppy' ? '#3f6b26' : '#4a7a2c';
-    // stem
-    for (let y = 13; y < T; y++) p.set(16, y, stem);
-    for (let y = 13; y < T; y += 2) p.set(17, y + 1, '#5c8c33');
-    // leaves
-    p.line(15, 23, 11, 20, '#4e7a2b');
-    p.line(11, 20, 9, 21, '#5c8c33');
-    p.line(17, 26, 21, 23, '#4e7a2b');
-    p.line(21, 23, 23, 24, '#5c8c33');
-    if (kind === 'poppy') {
-      // red petals
-      p.rect(11, 7, 10, 7, '#b83a2e');
-      p.rect(12, 5, 8, 10, '#c8402f');
-      p.rect(10, 9, 12, 4, '#b83a2e');
-      p.rect(13, 6, 3, 2, '#e05a44');
-      p.rect(11, 9, 2, 2, '#d64c38');
-      p.rect(19, 11, 2, 2, '#9c2c22');
-      // dark centre
-      p.rect(14, 9, 4, 3, '#3a2a14');
-      p.set(15, 10, '#e0c040');
-      p.rect(15, 13, 2, 1, '#5c8c33');
-    } else {
-      // yellow head
-      p.rect(12, 6, 8, 2, '#c4a21a');
-      p.rect(11, 8, 10, 5, '#e0c040');
-      p.rect(12, 13, 8, 2, '#c4a21a');
-      p.rect(13, 7, 6, 8, '#f2d24a');
-      p.rect(14, 9, 4, 4, '#ffe86a');
-      p.rect(13, 6, 2, 2, '#f8e070');
-      // green calyx
-      p.rect(14, 14, 4, 2, '#5c8c33');
-    }
-  };
+  });
 }
-
-const poppy = flowerTile('poppy');
-const dandelion = flowerTile('dandelion');
-
-const deadBush: TilePainter = (p) => {
-  p.fill('rgba(0,0,0,0)');
-  const branches: readonly (readonly [number, number, number, number, number])[] = [
-    [16, 31, 16, 16, 0],
-    [16, 24, 10, 15, 1],
-    [16, 22, 22, 12, 1],
-    [16, 18, 12, 8, 2],
-    [16, 20, 19, 6, 2],
-    [10, 15, 7, 9, 2],
-    [22, 12, 25, 6, 2],
-  ];
-  for (const [x0, y0, x1, y1, thickness] of branches) {
-    const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
-    for (let s = 0; s <= steps; s++) {
-      const t = s / Math.max(1, steps);
-      const x = Math.round(x0 + (x1 - x0) * t);
-      const y = Math.round(y0 + (y1 - y0) * t);
-      p.set(x, y, '#6a4a24');
-      if (thickness > 0 && s % 3 === 0) p.set(x + 1, y, '#5a3c1c');
-      if (thickness > 1 && s % 4 === 0) p.set(x, y + 1, '#7e5a2e');
-    }
-  }
-  const rng = mulberry32(0x6101);
-  for (let i = 0; i < 12; i++) {
-    const x = Math.floor(rng() * T);
-    const y = 4 + Math.floor(rng() * 16);
-    p.set(x, y, rng() < 0.5 ? '#7e5a2e' : '#553a1c');
-  }
-};
-
-// ---------------------------------------------------------------------------
-// crack overlay (crack_0 .. crack_9)
-// ---------------------------------------------------------------------------
 
 function crackTile(stage: number): TilePainter {
-  return (p) => {
-    p.fill('rgba(0,0,0,0)');
+  return sprite16((s) => {
     const rng = mulberry32(0xc0ffee ^ (stage * 7919));
     const alpha = Math.min(0.85, 0.26 + stage * 0.06);
     const core = `rgba(10,6,6,${alpha.toFixed(3)})`;
     const soft = `rgba(10,6,6,${(alpha * 0.55).toFixed(3)})`;
     const rays = 2 + Math.ceil(stage * 0.8);
     for (let ray = 0; ray < rays; ray++) {
-      let x = 15 + (hash2i(0xc1, stage, ray) % 3);
-      let y = 15 + (hash2i(0xc2, stage, ray) % 3);
+      let x = 7 + (hash2i(0xc1, stage, ray) % 3);
+      let y = 7 + (hash2i(0xc2, stage, ray) % 3);
       let angle = rng() * Math.PI * 2;
-      const length = 5 + Math.floor(rng() * 5) + stage * 2;
-      for (let s = 0; s < length; s++) {
-        angle += (rng() - 0.5) * 0.8;
-        const nextX = x + Math.round(Math.cos(angle) * 1.6);
-        const nextY = y + Math.round(Math.sin(angle) * 1.6);
-        if (nextX < -1 || nextY < -1 || nextX > T || nextY > T) break;
-        // Bresenham lines keep the fracture continuous (single dots read as noise)
-        p.line(x, y, nextX, nextY, core);
-        if (stage > 4) p.line(x + 1, y + 1, nextX + 1, nextY + 1, soft);
-        if (stage > 6 && s % 3 === 0) p.line(x - 1, y, nextX - 1, nextY, soft);
+      const length = 3 + Math.floor(rng() * 3) + stage;
+      for (let step = 0; step < length; step++) {
+        angle += (rng() - 0.5) * 0.9;
+        const nextX = Math.max(-1, Math.min(16, x + Math.round(Math.cos(angle) * 1.2)));
+        const nextY = Math.max(-1, Math.min(16, y + Math.round(Math.sin(angle) * 1.2)));
+        s.line(x, y, nextX, nextY, core);
+        if (stage > 4 && step % 2 === 0) s.line(x + 1, y + 1, nextX + 1, nextY + 1, soft);
         x = nextX;
         y = nextY;
       }
     }
-  };
+  });
+}
+
+/** Tiny 3x5 stencil letters for the TNT label. */
+const STENCIL: Readonly<Record<string, readonly string[]>> = {
+  T: ['111', '010', '010', '010', '010'],
+  N: ['101', '111', '111', '111', '101'],
+};
+
+function stampStencil(s: Sprite16, letter: string, x: number, y: number, color: string): void {
+  const rows = STENCIL[letter];
+  rows.forEach((row, dy) => {
+    for (let dx = 0; dx < 3; dx++) if (row[dx] === '1') s.set(x + dx, y + dy, color);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -1369,123 +427,639 @@ function crackTile(stage: number): TilePainter {
 // ---------------------------------------------------------------------------
 
 const TILES: Record<string, TilePainter> = {
-  air: (p) => p.fill('rgba(0,0,0,0)'),
-  stone,
-  granite,
-  diorite,
-  andesite,
-  cobblestone,
-  mossy_cobblestone: mossyCobblestone,
-  dirt: dirtBase,
-  coarse_dirt: coarseDirt,
-  grass_top: (p) => {
-    p.fill('#74a33f');
-    tone(p, 0x2001, '#87b552', '#66923a', { cell: 5, strength: 0.18, levels: 4 });
-    blobs(p, 0x2002, ['#7fae4a', '#6b9939', '#79a845'], 10, 1, 2);
-    specks(p, 0x2003, ['#5d8730', '#8fbd58', '#6f9d3c'], 18);
-    // short grass strokes give the top face its directionality
-    const rng = mulberry32(0x2004);
-    for (let i = 0; i < 16; i++) {
-      const x = Math.floor(rng() * T);
-      const y = Math.floor(rng() * T);
-      p.set(x, y, '#8fbd58');
-      p.set(x, wrap(y + 1), '#5d8730');
-      if (rng() < 0.4) p.set(wrap(x + 1), wrap(y + 1), '#7fae4a');
-      if (rng() < 0.25) p.set(x, wrap(y + 2), '#527d2c');
-    }
-  },
-  grass_side: (p) => {
-    dirtBase(p);
-    for (let x = 0; x < T; x++) {
-      const depth = 5 + Math.floor(hash2f(0x2345, x, 0) * 4);
+  air: sprite16((s) => s.fill('rgba(0,0,0,0)')),
+
+  stone: sprite16((s) => paintStone(s, 0x1101)),
+  granite: sprite16((s) => {
+    s.fill('#9A6A5E');
+    s.noise(0x1111, ['#9A6A5E', '#8F6156', '#A8786A', '#84564B'], [7, 3, 2, 2]);
+    s.speckle(0x1112, ['#B98A7B', '#B98A7B', '#74483E'], 7);
+    s.clusters(0x1113, ['#A8786A'], 2, 1);
+  }),
+  diorite: sprite16((s) => {
+    s.fill('#BCBCC0');
+    s.noise(0x1114, ['#BCBCC0', '#B3B3B7', '#C6C6CA', '#AAAAAE'], [7, 3, 3, 2]);
+    s.speckle(0x1115, ['#8C8C93', '#8C8C93', '#D4D4D8'], 7);
+  }),
+  andesite: sprite16((s) => {
+    s.fill('#8C8C8E');
+    s.noise(0x1116, ['#8C8C8E', '#828284', '#969698', '#7A7A7C'], [7, 3, 3, 2]);
+    s.speckle(0x1117, ['#A0A0A2', '#6E6E70'], 7);
+  }),
+  cobblestone: sprite16((s) => paintCobble(s, 0x1201, false)),
+  mossy_cobblestone: sprite16((s) => paintCobble(s, 0x1201, true)),
+
+  dirt: sprite16((s) => paintDirt(s, 0x1701)),
+  coarse_dirt: sprite16((s) => {
+    s.fill('#7B5635');
+    s.noise(0x1702, ['#7B5635', '#6F4C2D', '#8A623E', '#5F4127'], [6, 3, 3, 2]);
+    s.speckle(0x1703, ['#5F4127', '#5F4127', '#93683F', '#9C7148'], 12);
+    s.clusters(0x1704, ['#5F4127'], 3, 1);
+  }),
+
+  grass_top: sprite16((s) => {
+    s.fill(GRASS_BASE);
+    s.noise(0x2001, [GRASS_BASE, '#6DA84A', '#8FBF5A', '#5D8F3C'], [7, 3, 3, 1.5]);
+    // small 1-2px tufts, not 2x2 dark squares
+    s.speckle(0x2002, ['#5D8F3C', '#5D8F3C', '#6DA84A', '#8FBF5A', '#9CCD6B'], 14);
+    s.set(5, 4, '#5D8F3C');
+    s.set(5, 5, '#6DA84A');
+    s.set(10, 9, '#5D8F3C');
+    s.set(10, 10, '#6DA84A');
+    s.set(13, 3, '#6DA84A');
+    s.set(3, 11, '#9CCD6B');
+    s.set(12, 2, '#9CCD6B');
+    s.set(7, 7, '#9CCD6B');
+  }),
+
+  grass_side: sprite16((s) => {
+    paintDirt(s, 0x33aa);
+    for (let x = 0; x < 16; x++) {
+      const depth = 3 + (hash2i(0x2345, x, 0) % 2);
       for (let y = 0; y < depth; y++) {
-        let color = '#74a33f';
-        if (y <= 1) color = '#8cba58';
-        else if (y >= depth - 2) color = '#5d8733';
-        if (hash2f(0x2346, x, y) < 0.18) color = y < depth / 2 ? '#7fae4a' : '#527a2c';
-        p.set(x, y, color);
+        let color = GRASS_BASE;
+        if (y === 0) color = '#8FBF5A';
+        else if (y === depth - 1) color = '#5D8F3C';
+        if (hash2i(0x2346, x, y) % 5 === 0) color = y < depth / 2 ? '#6DA84A' : '#5D8F3C';
+        s.set(x, y, color);
       }
-      const overhang = hash2f(0x2347, x, 0);
-      if (overhang < 0.28) p.set(x, depth, '#5d8733');
-      else if (overhang < 0.42) p.set(x, depth, '#527a2c');
-      if (overhang > 0.9) p.set(x, wrap(depth + 1), '#4e7429');
+      const overhang = hash2i(0x2347, x, 0) % 10;
+      if (overhang < 2) s.set(x, depth, '#5D8F3C');
+      else if (overhang < 3) s.set(x, depth + 1, '#4F7A33');
     }
-    // stray grass pixels on the dirt band
-    const rng = mulberry32(0x2348);
-    for (let i = 0; i < 9; i++) {
-      const x = Math.floor(rng() * T);
-      const y = 9 + Math.floor(rng() * 4);
-      p.set(x, y, rng() < 0.5 ? '#5d8733' : '#4e7429');
+  }),
+
+  sand: sprite16((s) => {
+    s.fill('#DBD3A2');
+    s.noise(0x1901, ['#DBD3A2', '#E6DEAF', '#CFC691', '#C3B985'], [7, 3, 3, 2]);
+    s.speckle(0x1902, ['#C3B985', '#C3B985', '#E9E1B6', '#BDB37E'], 10);
+    s.rect(3, 6, 2, 1, '#C6BC87');
+    s.rect(11, 11, 2, 1, '#C6BC87');
+  }),
+  sandstone_top: sprite16((s) => {
+    s.fill('#DCD2A0');
+    s.noise(0x1a01, ['#DCD2A0', '#E7DDB0', '#D0C692', '#C5BA84'], [7, 3, 3, 2]);
+    s.speckle(0x1a02, ['#C5BA84', '#EDE3B6'], 8);
+  }),
+  sandstone_side: sprite16((s) => {
+    s.fill('#D8CC9A');
+    s.noise(0x1b01, ['#D8CC9A', '#CFC28E', '#E2D7A8', '#C6B983'], [7, 2, 2, 2]);
+    s.rect(0, 0, 16, 2, '#E6DBAC');
+    s.rect(0, 2, 16, 1, '#C6B983');
+    s.rect(0, 7, 16, 1, '#C6B983');
+    s.rect(0, 12, 16, 1, '#C6B983');
+    s.speckle(0x1b02, ['#C6B983', '#E6DBAC', '#BEAF79'], 10);
+    s.set(4, 5, '#BEAF79');
+    s.set(11, 9, '#BEAF79');
+  }),
+  sandstone_bottom: sprite16((s) => {
+    s.fill('#CFC28E');
+    s.noise(0x1c01, ['#CFC28E', '#DBD09E', '#C4B681', '#BAAC77'], [7, 3, 3, 2]);
+    s.speckle(0x1c02, ['#BAAC77', '#E2D7A8'], 8);
+    s.rect(3, 4, 1, 3, '#B4A671');
+    s.rect(10, 9, 1, 3, '#B4A671');
+  }),
+
+  gravel: sprite16((s) => {
+    s.fill('#4F4B47');
+    const tones = ['#8A8580', '#9A948D', '#7C7671', '#A29C94', '#6E6964', '#948E87'];
+    const rng = mulberry32(0x1d01);
+    const grid = 6;
+    const centers: Array<{ x: number; y: number; tone: string }> = [];
+    for (let gy = 0; gy < grid; gy++) {
+      for (let gx = 0; gx < grid; gx++) {
+        centers.push({
+          x: (gx + 0.15 + rng() * 0.7) * (16 / grid),
+          y: (gy + 0.15 + rng() * 0.7) * (16 / grid),
+          tone: tones[Math.floor(rng() * tones.length)],
+        });
+      }
     }
-  },
-  sand,
-  sandstone_top: sandstoneTop,
-  sandstone_side: sandstoneSide,
-  sandstone_bottom: sandstoneBottom,
-  gravel,
-  clay,
-  bedrock,
-  snow,
-  ice,
-  water,
-  lava,
-  oak_log: oakLog,
-  oak_log_top: oakLogTop,
-  birch_log: birchLog,
-  birch_log_top: birchLogTop,
-  spruce_log: spruceLog,
-  spruce_log_top: spruceLogTop,
-  oak_leaves: oakLeaves,
-  birch_leaves: birchLeaves,
-  spruce_leaves: spruceLeaves,
-  coal_ore: coalOre,
-  copper_ore: copperOre,
-  iron_ore: ironOre,
-  gold_ore: goldOre,
-  redstone_ore: redstoneOre,
-  lapis_ore: lapisOre,
-  diamond_ore: diamondOre,
-  obsidian,
-  oak_planks: oakPlanks,
-  birch_planks: birchPlanks,
-  spruce_planks: sprucePlanks,
-  smooth_stone: smoothStone,
-  stone_bricks: stoneBricks,
-  bricks,
-  glass,
-  wool_white: woolWhite,
-  wool_red: woolRed,
-  wool_yellow: woolYellow,
-  wool_blue: woolBlue,
-  wool_black: woolBlack,
-  crafting_table_top: craftingTableTop,
-  crafting_table_side: craftingTableSide,
-  crafting_table_front: craftingTableFront,
-  furnace_top: furnaceTop,
-  furnace_side: furnaceSide,
-  furnace_front: furnaceFront,
-  furnace_front_lit: furnaceFrontLit,
-  chest_top: chestTop,
-  chest_side: chestSide,
-  chest_front: chestFront,
-  torch,
-  tnt_top: tntTop,
-  tnt_side: tntSide,
-  tnt_bottom: tntBottom,
-  bookshelf,
-  coal_block: coalBlock,
-  iron_block: ironBlock,
-  gold_block: goldBlock,
-  diamond_block: diamondBlock,
-  lapis_block: lapisBlock,
-  redstone_block: redstoneBlock,
-  cactus_top: cactusTop,
-  cactus_side: cactusSide,
-  sugar_cane: sugarCane,
-  tall_grass: tallGrass,
-  poppy,
-  dandelion,
-  dead_bush: deadBush,
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        let d1 = Number.POSITIVE_INFINITY;
+        let d2 = Number.POSITIVE_INFINITY;
+        let best = centers[0];
+        for (const c of centers) {
+          const d = Math.hypot(x + 0.5 - c.x, y + 0.5 - c.y);
+          if (d < d1) {
+            d2 = d1;
+            d1 = d;
+            best = c;
+          } else if (d < d2) {
+            d2 = d;
+          }
+        }
+        if (d2 - d1 < 0.55) {
+          s.set(x, y, '#4F4B47');
+          continue;
+        }
+        const facing = x + 0.5 - best.x + (y + 0.5 - best.y);
+        let color = best.tone;
+        if (facing < -0.7) color = '#B0A9A0';
+        else if (facing > 0.7) color = '#57524E';
+        s.set(x, y, color);
+      }
+    }
+  }),
+
+  clay: sprite16((s) => {
+    s.fill('#A4AFB6');
+    s.noise(0x1e01, ['#A4AFB6', '#9AA5AC', '#AEB9C0', '#8F9AA1'], [7, 3, 3, 2]);
+    s.speckle(0x1e02, ['#8F9AA1', '#B6C1C8'], 7);
+  }),
+  bedrock: sprite16((s) => {
+    s.fill('#4A4A4A');
+    s.noise(0x1f01, ['#4A4A4A', '#565656', '#3E3E3E', '#626262', '#333333'], [5, 3, 3, 2, 2]);
+    s.clusters(0x1f02, ['#2E2E2E', '#343434'], 6, 1);
+    s.speckle(0x1f03, ['#6A6A6A', '#2C2C2C'], 8);
+  }),
+
+  snow: sprite16((s) => {
+    s.fill('#F2F5F8');
+    s.noise(0x2003, ['#F2F5F8', '#FFFFFF', '#E8EEF3', '#DEE7EE'], [6, 2, 3, 1]);
+    s.speckle(0x2004, ['#E2EAEF', '#FFFFFF', '#D6E0E8'], 8);
+  }),
+  ice: sprite16((s) => {
+    const alpha = 214;
+    s.fill(`rgba(150,196,236,${alpha})`);
+    const palette = [
+      `rgba(150,196,236,${alpha})`,
+      `rgba(160,206,244,${alpha})`,
+      `rgba(136,182,224,${alpha})`,
+      `rgba(178,220,250,${alpha})`,
+    ];
+    s.noise(0x2101, palette, [4, 3, 3, 2]);
+    const crack = 'rgba(226,244,252,238)';
+    s.line(2, 12, 7, 4, crack);
+    s.line(9, 14, 13, 7, crack);
+    s.line(5, 2, 9, 6, crack);
+    s.speckle(0x2102, [crack, `rgba(120,168,214,${alpha})`], 6);
+  }),
+  water: sprite16((s) => {
+    const alpha = 205;
+    s.fill(`rgba(63,118,228,${alpha})`);
+    s.noise(0x2201, [
+      `rgba(63,118,228,${alpha})`,
+      `rgba(58,110,216,${alpha})`,
+      `rgba(71,127,234,${alpha})`,
+      `rgba(53,103,200,${alpha})`,
+    ], [6, 3, 3, 2]);
+    // no diagonal stripes: just a few short ripple highlights
+    const glint = 'rgba(94,147,242,216)';
+    s.rect(2, 3, 2, 1, glint);
+    s.rect(9, 2, 2, 1, glint);
+    s.rect(5, 8, 2, 1, glint);
+    s.rect(12, 7, 2, 1, glint);
+    s.rect(1, 12, 2, 1, glint);
+    s.rect(8, 13, 2, 1, glint);
+    s.rect(13, 11, 1, 1, glint);
+    s.set(6, 5, 'rgba(40,84,176,208)');
+    s.set(10, 10, 'rgba(40,84,176,208)');
+  }),
+  lava: sprite16((s) => {
+    s.fill('#D45A0E');
+    s.noise(0x2301, ['#D45A0E', '#E06A12', '#C24C08', '#F7A121', '#A83C05'], [5, 3, 2, 1, 1]);
+    s.clusters(0x2302, ['#FFC33C', '#FFB733'], 5, 1);
+    s.clusters(0x2303, ['#8F2C05', '#A83C05'], 4, 1);
+    s.speckle(0x2304, ['#FFE07A', '#FF9A1F', '#8F2C05'], 10);
+  }),
+
+  oak_log: logSideTile(0x2501, '#6F5430', '#7E623A', '#5A4024', '#42301B'),
+  oak_log_top: logTopTile(0x2502, '#B08F5C', '#C9AA74', '#8C6F42', '#6F5430', '#59422A'),
+  birch_log: sprite16((s) => {
+    s.fill('#D9D5C6');
+    s.noise(0x2601, ['#D9D5C6', '#CFCBB9', '#E5E1D3', '#C3BEAC'], [7, 3, 3, 1]);
+    for (let i = 0; i < 8; i++) {
+      const x = Math.floor(mulberry32(0x2602 + i)() * 14);
+      const y = Math.floor(mulberry32(0x2603 + i)() * 14);
+      s.rect(x, y, 2 + (i % 2), 1, '#6F6A5E');
+      s.rect(x, y + 1, 1, 1, '#A9A496');
+    }
+    s.speckle(0x2604, ['#B8B3A2', '#EDE9DC'], 8);
+  }),
+  birch_log_top: logTopTile(0x2605, '#D6C99F', '#E6DDB8', '#B3A67C', '#C2BEB0', '#9C988A'),
+  spruce_log: logSideTile(0x2701, '#4B3626', '#5A4430', '#3A2A1A', '#2A1E11'),
+  spruce_log_top: logTopTile(0x2702, '#7A5F3A', '#8B6F45', '#5E4527', '#3F2D1B', '#2C2012'),
+
+  oak_leaves: sprite16((s) => paintLeaves(s, 0x2801, '#3A6420', '#457528', '#4F8530', '#5D983B')),
+  birch_leaves: sprite16((s) => paintLeaves(s, 0x2901, '#4C7A28', '#588A32', '#64993B', '#74AB48')),
+  spruce_leaves: sprite16((s) => paintLeaves(s, 0x2a01, '#2F5322', '#395F27', '#436C2D', '#4F7C34')),
+
+  coal_ore: oreTile(0x2b01, '#4A4A4A', '#2E2E2E', '#161616', 7),
+  copper_ore: oreTile(0x2c01, '#E8A878', '#C47A48', '#8A4A28', 7),
+  iron_ore: oreTile(0x2d01, '#EBDAC2', '#C9AE90', '#96795C', 7),
+  gold_ore: oreTile(0x2e01, '#FFE45E', '#F0C830', '#B08A12', 6),
+  redstone_ore: oreTile(0x2f01, '#FF6A5A', '#D6372E', '#8A1912', 8),
+  lapis_ore: oreTile(0x3002, '#7A92FF', '#3F5FD6', '#24388F', 8),
+  diamond_ore: oreTile(0x3101, '#A8FFF7', '#5CE8DC', '#27A69B', 7),
+
+  obsidian: sprite16((s) => {
+    s.fill('#141020');
+    s.noise(0x3201, ['#141020', '#1B1729', '#241E36', '#2F2745'], [5, 3, 2, 2]);
+    s.clusters(0x3202, ['#1B1729', '#241E36'], 5, 1);
+    s.speckle(0x3203, ['#3B2A5C', '#4B3670', '#5A4380'], 7);
+    s.rect(3, 10, 2, 1, '#2F2745');
+    s.rect(10, 4, 2, 1, '#2F2745');
+  }),
+
+  oak_planks: sprite16((s) => paintPlanks(s, 0x3301, '#B58B52', '#C9A267', '#9C7546', '#6F5230')),
+  birch_planks: sprite16((s) => paintPlanks(s, 0x3401, '#D7CDB0', '#E6DDC4', '#C3B896', '#918770')),
+  spruce_planks: sprite16((s) => paintPlanks(s, 0x3501, '#7A5A38', '#8E6C45', '#67492E', '#4A3420')),
+
+  smooth_stone: sprite16((s) => {
+    s.fill('#9A9A9A');
+    s.noise(0x3601, ['#9A9A9A', '#949494', '#A2A2A2', '#8E8E8E'], [6, 3, 2, 1]);
+    s.rect(0, 0, 16, 1, '#A6A6A6');
+    s.rect(0, 15, 16, 1, '#8A8A8A');
+    s.speckle(0x3602, ['#A2A2A2', '#8F8F8F'], 5);
+  }),
+  stone_bricks: sprite16((s) => paintStoneBricks(s, 0x3603, '#7D7D7D', '#8F8F8F', '#686868', '#5A5A5A')),
+  bricks: sprite16((s) => {
+    const brickTones = ['#A54C3C', '#B0543F', '#984438', '#AD5142'];
+    for (let y = 0; y < 16; y++) {
+      const row = Math.floor(y / 4);
+      const shift = (row % 2) * 4;
+      for (let x = 0; x < 16; x++) {
+        const xs = (x + shift) % 16;
+        if (y % 4 === 3 || xs % 8 === 7) {
+          s.set(x, y, '#C3B6A4');
+          continue;
+        }
+        const brick = hash2i(0x3801, row * 2 + Math.floor(xs / 8), 7);
+        let color = brickTones[brick % brickTones.length];
+        if (y % 4 === 0) color = '#C46650';
+        else if (y % 4 === 2) color = '#83362A';
+        s.set(x, y, color);
+      }
+    }
+    s.speckle(0x3802, ['#B85A44', '#8F3C2E'], 6);
+  }),
+
+  glass: sprite16((s) => {
+    s.fill('rgba(0,0,0,0)');
+    const frame = '#C6E6F2';
+    const frameDark = '#9CC4D6';
+    const shine = '#EEFBFF';
+    s.rect(0, 0, 16, 1, frame);
+    s.rect(0, 15, 16, 1, frame);
+    s.rect(0, 0, 1, 16, frame);
+    s.rect(15, 0, 1, 16, frame);
+    s.rect(1, 1, 14, 1, frameDark);
+    s.rect(1, 1, 1, 14, frameDark);
+    s.set(2, 3, shine);
+    s.set(3, 2, shine);
+    s.line(4, 11, 11, 4, shine);
+    s.set(12, 12, frame);
+  }),
+
+  wool_white: sprite16((s) => {
+    s.fill('#E6E6E6');
+    s.noise(0x3901, ['#E6E6E6', '#DEDEDE', '#EFEFEF', '#D6D6D6'], [8, 2, 2, 1]);
+  }),
+  wool_red: sprite16((s) => {
+    s.fill('#B83A3A');
+    s.noise(0x3a01, ['#B83A3A', '#AE3131', '#C44444', '#A22B2B'], [8, 2, 2, 1]);
+  }),
+  wool_yellow: sprite16((s) => {
+    s.fill('#E0C040');
+    s.noise(0x3b01, ['#E0C040', '#D6B734', '#EBCB50', '#C9AA2A'], [8, 2, 2, 1]);
+  }),
+  wool_blue: sprite16((s) => {
+    s.fill('#3A4AB8');
+    s.noise(0x3c01, ['#3A4AB8', '#3544AB', '#4354C4', '#2F3D99'], [8, 2, 2, 1]);
+  }),
+  wool_black: sprite16((s) => {
+    s.fill('#2A2A2A');
+    s.noise(0x3d01, ['#2A2A2A', '#262626', '#303030', '#222222'], [8, 2, 2, 1]);
+  }),
+
+  crafting_table_top: sprite16((s) => {
+    paintPlanks(s, 0x7101, '#B58B52', '#C9A267', '#9C7546', '#6F5230');
+    s.rect(0, 0, 16, 1, '#6B4A24');
+    s.rect(0, 15, 16, 1, '#6B4A24');
+    s.rect(0, 0, 1, 16, '#6B4A24');
+    s.rect(15, 0, 1, 16, '#6B4A24');
+    s.rect(5, 1, 1, 14, '#8D6A3C');
+    s.rect(10, 1, 1, 14, '#8D6A3C');
+    s.rect(1, 5, 14, 1, '#8D6A3C');
+    s.rect(1, 10, 14, 1, '#8D6A3C');
+    for (const [cx, cy] of [
+      [1, 1],
+      [6, 1],
+      [11, 1],
+      [1, 6],
+      [6, 6],
+      [11, 6],
+      [1, 11],
+      [6, 11],
+      [11, 11],
+    ] as const) {
+      s.set(cx, cy, '#D9B97E');
+      s.set(cx + 1, cy, '#C9A267');
+    }
+  }),
+  crafting_table_side: sprite16((s) => {
+    paintPlanks(s, 0x7102, '#B58B52', '#C9A267', '#9C7546', '#6F5230');
+    s.rect(0, 0, 16, 1, '#6B4A24');
+    s.rect(0, 15, 16, 1, '#6B4A24');
+    // saw
+    s.rect(2, 4, 7, 1, '#C8C8C8');
+    for (let i = 0; i < 4; i++) s.set(3 + i * 2, 5, '#E0E0E0');
+    s.rect(9, 3, 2, 4, '#7A5A30');
+    // hammer
+    s.rect(4, 10, 1, 5, '#8D6A3C');
+    s.rect(3, 9, 4, 2, '#A0A0A0');
+    s.set(3, 9, '#C8C8C8');
+  }),
+  crafting_table_front: sprite16((s) => {
+    paintPlanks(s, 0x7103, '#B58B52', '#C9A267', '#9C7546', '#6F5230');
+    s.rect(0, 0, 16, 1, '#6B4A24');
+    s.rect(0, 15, 16, 1, '#6B4A24');
+    s.rect(3, 2, 10, 12, '#6B4A24');
+    s.rect(4, 3, 8, 10, '#B58B52');
+    s.rect(4, 3, 8, 1, '#D9B97E');
+    s.rect(7, 4, 1, 8, '#8D6A3C');
+    s.rect(4, 7, 8, 1, '#8D6A3C');
+  }),
+
+  furnace_top: sprite16((s) => {
+    paintStoneBricks(s, 0x3e01, '#7C7C7C', '#8A8A8A', '#6C6C6C', '#5C5C5C');
+    s.rect(4, 4, 8, 8, '#3A3A3A');
+    s.rect(5, 5, 6, 6, '#2A2A2A');
+    s.rect(6, 6, 4, 4, '#1C1C1C');
+    s.set(5, 5, '#585858');
+    s.rect(6, 7, 4, 1, '#3A3A3A');
+    s.rect(6, 9, 4, 1, '#3A3A3A');
+  }),
+  furnace_side: sprite16((s) => paintStoneBricks(s, 0x3f01, '#7A7A7A', '#888888', '#666666', '#545454')),
+  furnace_front: sprite16((s) => {
+    paintStoneBricks(s, 0x3f02, '#7A7A7A', '#888888', '#666666', '#545454');
+    s.rect(2, 3, 12, 2, '#8F8F8F');
+    s.rect(2, 5, 1, 10, '#8A8A8A');
+    s.rect(13, 5, 1, 10, '#6D6D6D');
+    s.rect(3, 7, 10, 8, '#1E1E1E');
+    s.rect(4, 8, 8, 6, '#161616');
+    s.rect(4, 12, 8, 2, '#0E0E0E');
+    s.rect(5, 11, 5, 1, '#2A2A2A');
+  }),
+  furnace_front_lit: sprite16((s) => {
+    paintStoneBricks(s, 0x3f02, '#7A7A7A', '#888888', '#666666', '#545454');
+    s.rect(2, 3, 12, 2, '#8F8F8F');
+    s.rect(2, 5, 1, 10, '#8A8A8A');
+    s.rect(13, 5, 1, 10, '#6D6D6D');
+    s.rect(3, 7, 10, 8, '#1E1E1E');
+    s.rect(4, 8, 8, 6, '#241410');
+    // fire: layered flames filling the lower firebox
+    s.rect(4, 11, 8, 3, '#F07A18');
+    s.rect(5, 9, 6, 3, '#FFB733');
+    s.rect(6, 8, 4, 2, '#FFE07A');
+    s.rect(7, 8, 2, 1, '#FFF2B0');
+    s.set(5, 8, '#FFB733');
+    s.set(10, 9, '#FFB733');
+    // warm glow on the stone frame
+    s.speckle(0x3f05, ['#E08030', '#D06A20'], 6);
+  }),
+
+  chest_top: sprite16((s) => {
+    paintPlanks(s, 0x3b01, '#A87B42', '#BD8F52', '#8A5E30', '#6B4520');
+    s.rect(0, 0, 16, 1, '#6B4520');
+    s.rect(0, 15, 16, 1, '#6B4520');
+    s.rect(0, 0, 1, 16, '#6B4520');
+    s.rect(15, 0, 1, 16, '#6B4520');
+    s.rect(1, 1, 14, 1, '#BD8F52');
+    s.rect(6, 12, 4, 4, '#8A8A8A');
+    s.rect(7, 13, 2, 2, '#E0C060');
+  }),
+  chest_side: sprite16((s) => {
+    paintPlanks(s, 0x3b02, '#A87B42', '#BD8F52', '#8A5E30', '#6B4520');
+    s.rect(0, 0, 16, 1, '#6B4520');
+    s.rect(0, 15, 16, 1, '#6B4520');
+    s.rect(0, 0, 1, 16, '#6B4520');
+    s.rect(15, 0, 1, 16, '#6B4520');
+    s.rect(0, 7, 16, 1, '#6B4520');
+    s.rect(0, 6, 16, 1, '#BD8F52');
+    s.rect(2, 1, 2, 2, '#7A7A7A');
+    s.rect(12, 1, 2, 2, '#7A7A7A');
+  }),
+  chest_front: sprite16((s) => {
+    paintPlanks(s, 0x3b03, '#A87B42', '#BD8F52', '#8A5E30', '#6B4520');
+    s.rect(0, 0, 16, 1, '#6B4520');
+    s.rect(0, 15, 16, 1, '#6B4520');
+    s.rect(0, 0, 1, 16, '#6B4520');
+    s.rect(15, 0, 1, 16, '#6B4520');
+    s.rect(0, 7, 16, 1, '#6B4520');
+    s.rect(0, 6, 16, 1, '#BD8F52');
+    s.rect(6, 6, 4, 5, '#7A7A7A');
+    s.rect(6, 6, 4, 1, '#A8A8A8');
+    s.rect(7, 7, 2, 2, '#E0C060');
+    s.set(7, 10, '#5A4212');
+    s.set(8, 10, '#5A4212');
+  }),
+
+  torch: sprite16((s) => {
+    s.fill('rgba(0,0,0,0)');
+    // stick
+    s.rect(7, 7, 2, 9, '#8A5A2E');
+    s.rect(7, 7, 1, 9, '#5A3A1E');
+    s.rect(8, 7, 1, 9, '#A06A38');
+    s.set(7, 15, '#4A2E16');
+    // coal head
+    s.rect(6, 5, 4, 2, '#3A2A18');
+    s.rect(6, 4, 4, 1, '#6A4A28');
+    // three-layer flame teardrop, attached to the head (no floating embers)
+    s.rect(7, 0, 2, 1, '#FFC44A');
+    s.rect(6, 1, 4, 1, '#FF8A1E');
+    s.rect(7, 1, 2, 1, '#FFC44A');
+    s.rect(6, 2, 4, 1, '#FF8A1E');
+    s.rect(7, 2, 2, 1, '#FFF0B0');
+    s.rect(6, 3, 4, 1, '#FF8A1E');
+    s.rect(7, 3, 2, 1, '#FFC44A');
+    s.rect(6, 4, 4, 1, '#FF8A1E');
+  }),
+
+  tnt_side: sprite16((s) => {
+    s.fill('#C4392C');
+    s.noise(0x3101, ['#C4392C', '#B03024', '#D04434', '#A52A20'], [7, 2, 2, 2]);
+    s.rect(0, 5, 16, 2, '#D8D2C8');
+    s.rect(0, 7, 16, 4, '#EDE7DD');
+    s.rect(0, 11, 16, 1, '#D8D2C8');
+    s.rect(0, 5, 16, 1, '#B8B2A8');
+    s.rect(0, 11, 16, 1, '#B8B2A8');
+    stampStencil(s, 'T', 2, 7, '#2A2A2A');
+    stampStencil(s, 'N', 6, 7, '#2A2A2A');
+    stampStencil(s, 'T', 10, 7, '#2A2A2A');
+    s.rect(0, 0, 16, 1, '#A52A20');
+    s.rect(0, 15, 16, 1, '#A52A20');
+  }),
+  tnt_top: sprite16((s) => {
+    s.fill('#C4392C');
+    s.noise(0x3111, ['#C4392C', '#B03024', '#D04434', '#A52A20'], [7, 2, 2, 2]);
+    s.rect(0, 0, 16, 1, '#A52A20');
+    s.rect(0, 15, 16, 1, '#A52A20');
+    s.rect(6, 6, 4, 4, '#4A3A30');
+    s.rect(7, 7, 2, 2, '#241A14');
+    s.rect(8, 2, 1, 5, '#6A4A2A');
+    s.rect(9, 2, 2, 1, '#6A4A2A');
+  }),
+  tnt_bottom: sprite16((s) => {
+    s.fill('#8A2C20');
+    s.noise(0x3121, ['#8A2C20', '#7C2318', '#983426', '#6F1F18'], [7, 2, 2, 2]);
+    s.rect(0, 0, 16, 1, '#6A1A14');
+    s.rect(0, 15, 16, 1, '#6A1A14');
+  }),
+
+  bookshelf: sprite16((s) => {
+    paintPlanks(s, 0x4201, '#B58B52', '#C9A267', '#9C7546', '#6F5230');
+    s.rect(0, 0, 16, 1, '#8D6A3C');
+    s.rect(0, 15, 16, 1, '#8D6A3C');
+    s.rect(0, 7, 16, 2, '#6A4A24');
+    const bookColors = ['#A83A34', '#34589C', '#3F7A3C', '#B08A2E', '#8A4A8A', '#C8C0A8'];
+    const rng = mulberry32(0x4202);
+    for (const [top, bottom] of [
+      [1, 7],
+      [9, 15],
+    ] as const) {
+      let x = 1;
+      while (x < 15) {
+        const width = 1 + Math.floor(rng() * 2);
+        const height = bottom - top - Math.floor(rng() * 2);
+        const color = bookColors[Math.floor(rng() * bookColors.length)];
+        s.rect(x, bottom - height, width, height, color);
+        s.rect(x, bottom - height, width, 1, '#D8C890');
+        s.rect(x + width - 1, bottom - height, 1, height, '#3A2A18');
+        x += width + 1;
+      }
+    }
+  }),
+
+  coal_block: mineralBlockTile(0x4401, '#262626', '#3C3C3C', '#161616', '#555555'),
+  iron_block: mineralBlockTile(0x4501, '#C8C8C8', '#E6E6E6', '#9A9A9A', '#F8F8F8'),
+  gold_block: mineralBlockTile(0x4601, '#F0CC3C', '#FFE868', '#C09818', '#FFF4A8'),
+  diamond_block: mineralBlockTile(0x4701, '#52E0D4', '#9CFFF6', '#2A9A92', '#E0FFF9'),
+  lapis_block: mineralBlockTile(0x4801, '#3A54C8', '#5A74EC', '#22378F', '#8AA2FF'),
+  redstone_block: mineralBlockTile(0x4901, '#B8342A', '#E05040', '#7F1C16', '#FF7060'),
+
+  cactus_top: sprite16((s) => {
+    s.fill('#4C7A2A');
+    s.noise(0x4a01, ['#4C7A2A', '#457326', '#558630', '#3D6A20'], [7, 3, 2, 2]);
+    s.rect(0, 0, 16, 1, '#3A5F20');
+    s.rect(0, 15, 16, 1, '#3A5F20');
+    s.rect(0, 0, 1, 16, '#3A5F20');
+    s.rect(15, 0, 1, 16, '#3A5F20');
+    s.rect(4, 4, 8, 8, '#558630');
+    s.rect(5, 5, 6, 6, '#6A9A3E');
+    for (const [sx, sy] of [
+      [3, 3],
+      [12, 4],
+      [4, 12],
+      [12, 11],
+    ] as const) {
+      s.set(sx, sy, '#D8E6A8');
+      s.set(sx + 1, sy, '#A8C878');
+    }
+  }),
+  cactus_side: sprite16((s) => {
+    s.fill('#4C7A2A');
+    s.noise(0x4a02, ['#4C7A2A', '#457326', '#558630', '#3D6A20'], [7, 3, 2, 2]);
+    s.rect(0, 0, 1, 16, '#3A5F20');
+    s.rect(1, 0, 1, 16, '#5C8C33');
+    s.rect(15, 0, 1, 16, '#3A5F20');
+    s.rect(14, 0, 1, 16, '#5C8C33');
+    s.rect(7, 0, 2, 16, '#558630');
+    s.rect(7, 0, 1, 16, '#6A9A3E');
+    for (let y = 2; y < 16; y += 4) {
+      s.set(4, y, '#D8E6A8');
+      s.set(11, y + 2, '#D8E6A8');
+      s.set(4, y + 1, '#A8C878');
+    }
+  }),
+
+  sugar_cane: sprite16((s) => {
+    s.fill('rgba(0,0,0,0)');
+    const stalks: ReadonlyArray<readonly [number, number]> = [
+      [2, 0],
+      [7, 2],
+      [12, 1],
+    ];
+    for (const [x, top] of stalks) {
+      s.rect(x, top, 2, 16 - top, '#7FBE4A');
+      s.rect(x, top, 1, 16 - top, '#65933A');
+      s.rect(x + 1, top, 1, 16 - top, '#96C25C');
+      for (let y = top + 3; y < 16; y += 4) {
+        s.rect(x - 1, y, 4, 1, '#5C8834');
+        s.set(x, y - 1, '#A8D070');
+      }
+      s.set(x, top, '#A8D070');
+      s.set(x + 1, top, '#A8D070');
+      s.line(x, top + 1, x - 2, top - 1, '#79A848');
+      s.line(x + 1, top + 1, x + 3, top - 1, '#79A848');
+    }
+    s.line(6, 11, 4, 8, '#6A9A3C');
+  }),
+
+  tall_grass: tallGrassTile(),
+
+  poppy: sprite16((s) => {
+    s.fill('rgba(0,0,0,0)');
+    // stem: 2 logical px wide (same as vanilla), from the ground up under the head
+    s.rect(7, 8, 1, 8, '#3F6B26');
+    s.rect(8, 8, 1, 8, '#4E7A2B');
+    // two leaves
+    s.rect(5, 10, 2, 1, '#3F6B26');
+    s.rect(4, 11, 3, 1, '#4E7A2B');
+    s.rect(9, 12, 2, 1, '#3F6B26');
+    s.rect(9, 13, 3, 1, '#4E7A2B');
+    // red flower head: 7 wide x 6 tall (vanilla poppy is ~6x7), top rows stay clear
+    s.rect(6, 2, 5, 1, '#D63C30');
+    s.rect(5, 3, 7, 1, '#C8302A');
+    s.rect(5, 4, 7, 1, '#C8302A');
+    s.rect(5, 5, 7, 1, '#C8302A');
+    s.rect(5, 6, 7, 1, '#C8302A');
+    s.rect(6, 7, 5, 1, '#A82A22');
+    // petal shading + dark pistil centre
+    s.set(6, 3, '#E05A44');
+    s.set(7, 2, '#E05A44');
+    s.set(5, 5, '#A82A22');
+    s.set(11, 5, '#A82A22');
+    s.rect(7, 4, 3, 2, '#2A1A10');
+    s.set(8, 3, '#1A0F08');
+    s.set(8, 6, '#1A0F08');
+  }),
+  dandelion: sprite16((s) => {
+    s.fill('rgba(0,0,0,0)');
+    s.rect(7, 9, 1, 7, '#3F6B26');
+    s.rect(8, 9, 1, 7, '#4E7A2B');
+    // leaves
+    s.rect(5, 11, 2, 1, '#3F6B26');
+    s.rect(4, 12, 3, 1, '#4E7A2B');
+    s.rect(9, 12, 2, 1, '#3F6B26');
+    s.rect(9, 13, 3, 1, '#4E7A2B');
+    // yellow flower head: 7 wide x 6 tall, sits in the lower 13 px of the tile
+    s.rect(6, 3, 5, 1, '#F2D24A');
+    s.rect(5, 4, 7, 1, '#F2D24A');
+    s.rect(5, 5, 7, 1, '#F2D24A');
+    s.rect(5, 6, 7, 1, '#F2D24A');
+    s.rect(6, 7, 5, 1, '#E8C63E');
+    s.rect(7, 8, 3, 1, '#C4A21A');
+    s.set(6, 4, '#FFE86A');
+    s.set(7, 3, '#FFE86A');
+    s.set(5, 5, '#D8B830');
+    s.set(11, 6, '#D8B830');
+    s.rect(7, 5, 3, 2, '#C4A21A');
+    s.set(8, 5, '#B89418');
+  }),
+  dead_bush: sprite16((s) => {
+    s.fill('rgba(0,0,0,0)');
+    s.line(7, 15, 7, 8, '#6B4A24');
+    s.line(7, 11, 3, 6, '#6B4A24');
+    s.line(7, 10, 11, 5, '#7E5A2E');
+    s.line(7, 8, 5, 3, '#6B4A24');
+    s.line(7, 8, 9, 2, '#7E5A2E');
+    s.line(3, 6, 2, 4, '#5A3C1C');
+    s.line(11, 5, 13, 3, '#5A3C1C');
+    s.speckle(0x6101, ['#7E5A2E', '#5A3C1C'], 5);
+  }),
 };
 
 for (let stage = 0; stage < 10; stage++) {

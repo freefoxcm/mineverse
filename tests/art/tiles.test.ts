@@ -62,6 +62,20 @@ describe('tiles: geometry and determinism', () => {
     }
   });
 
+  it('is a crisp 16x16 logical-pixel texture: every 2x2 block is uniform', () => {
+    for (const name of TILE_NAMES) {
+      const p = paint(TILES[name]);
+      for (let y = 0; y < TILE_SIZE; y += 2) {
+        for (let x = 0; x < TILE_SIZE; x += 2) {
+          const block = p.get(x, y);
+          expect(p.get(x + 1, y), `${name} @${x},${y} (1,0)`).toEqual(block);
+          expect(p.get(x, y + 1), `${name} @${x},${y} (0,1)`).toEqual(block);
+          expect(p.get(x + 1, y + 1), `${name} @${x},${y} (1,1)`).toEqual(block);
+        }
+      }
+    }
+  });
+
   it('is deterministic: two independent runs produce identical bytes', () => {
     for (const name of TILE_NAMES) {
       const a = paint(TILES[name]);
@@ -122,12 +136,14 @@ describe('tiles: transparency contract', () => {
       for (let i = 3; i < p.data.length; i += 4) if (p.data[i] === 0) transparent++;
       expect(transparent, name).toBeGreaterThan(0);
     }
-    // leaves are cutout as well and need clustered holes (>=8% of the tile)
+    // leaves are cutout as well and need clustered holes (10-14% of the tile)
     for (const name of ['oak_leaves', 'birch_leaves', 'spruce_leaves']) {
       const p = paint(TILES[name]);
       let transparent = 0;
       for (let i = 3; i < p.data.length; i += 4) if (p.data[i] === 0) transparent++;
-      expect(transparent / (TILE_SIZE * TILE_SIZE), name).toBeGreaterThan(0.08);
+      const ratio = transparent / (TILE_SIZE * TILE_SIZE);
+      expect(ratio, name).toBeGreaterThan(0.08);
+      expect(ratio, name).toBeLessThan(0.2);
     }
   });
 
@@ -179,29 +195,83 @@ describe('tiles: crack overlay', () => {
   });
 });
 
-describe('tiles: no high-frequency white noise', () => {
-  /** Fraction of horizontal neighbour pairs whose luminance jumps hard. */
-  function roughPairRatio(name: string, threshold = 46): number {
-    const p = paint(TILES[name]);
-    let pairs = 0;
-    let rough = 0;
-    for (let y = 0; y < TILE_SIZE; y++) {
-      for (let x = 0; x < TILE_SIZE - 1; x++) {
-        const a = p.get(x, y);
-        const b = p.get(x + 1, y);
-        if (a[3] === 0 || b[3] === 0) continue;
-        const la = a[0] * 0.299 + a[1] * 0.587 + a[2] * 0.114;
-        const lb = b[0] * 0.299 + b[1] * 0.587 + b[2] * 0.114;
-        pairs++;
-        if (Math.abs(la - lb) > threshold) rough++;
+describe('tiles: cross plant proportions', () => {
+  it('flowers keep a small head, stay in the lower part of the tile and are not full-tile', () => {
+    for (const name of ['poppy', 'dandelion']) {
+      const p = paint(TILES[name]);
+      let minX = 16;
+      let maxX = -1;
+      let minY = 16;
+      let maxY = -1;
+      const rowWidths: number[] = new Array(16).fill(0);
+      for (let y = 0; y < 16; y++) {
+        for (let x = 0; x < 16; x++) {
+          if (p.get(x * 2, y * 2)[3] === 0) continue;
+          rowWidths[y]++;
+          minX = Math.min(minX, x);
+          maxX = Math.max(maxX, x);
+          minY = Math.min(minY, y);
+          maxY = Math.max(maxY, y);
+        }
       }
+      // clear transparent rows above the flower
+      expect(minY, name).toBeGreaterThanOrEqual(2);
+      // reaches the ground plane and stays inside the bottom 14 logical rows
+      expect(maxY, name).toBe(15);
+      // head is ~7 logical px wide, not a full-tile blob
+      const headWidth = Math.max(...rowWidths.slice(minY, minY + 5));
+      expect(headWidth, `${name} head width`).toBeGreaterThanOrEqual(5);
+      expect(headWidth, `${name} head width`).toBeLessThanOrEqual(8);
+      // whole silhouette is narrow: stem + 1-2 leaves
+      expect(maxX - minX + 1, `${name} silhouette width`).toBeLessThanOrEqual(9);
+      // stem is thin
+      expect(rowWidths[14], `${name} stem width`).toBeLessThanOrEqual(4);
     }
-    return pairs === 0 ? 0 : rough / pairs;
+  });
+});
+
+describe('tiles: clean 16px pixel style', () => {
+  interface LogicalStats {
+    unique: number;
+    roughPairRatio: number;
   }
 
-  it('terrain base tiles cluster their colour variation', () => {
-    for (const name of ['stone', 'dirt', 'grass_top', 'sand', 'oak_log', 'cobblestone', 'water', 'lava']) {
-      expect(roughPairRatio(name), name).toBeLessThan(0.2);
+  /** Stats sampled at the 16x16 logical resolution (one sample per 2x2 block). */
+  function logicalStats(name: string): LogicalStats {
+    const p = paint(TILES[name]);
+    const colors = new Set<string>();
+    const luma = (c: readonly number[]): number => c[0] * 0.299 + c[1] * 0.587 + c[2] * 0.114;
+    let pairs = 0;
+    let rough = 0;
+    for (let y = 0; y < 16; y++) {
+      for (let x = 0; x < 16; x++) {
+        const c = p.get(x * 2, y * 2);
+        colors.add(`${c[0]},${c[1]},${c[2]},${c[3]}`);
+        if (x === 15) continue;
+        const n = p.get((x + 1) * 2, y * 2);
+        if (c[3] === 0 || n[3] === 0) continue;
+        pairs++;
+        if (Math.abs(luma(c) - luma(n)) > 60) rough++;
+      }
+    }
+    return { unique: colors.size, roughPairRatio: pairs === 0 ? 0 : rough / pairs };
+  }
+
+  it('base terrain tiles use a limited, clustered palette (not salt-and-pepper)', () => {
+    const paletteLimits: Readonly<Record<string, number>> = {
+      stone: 14,
+      dirt: 10,
+      grass_top: 10,
+      sand: 10,
+      water: 10,
+      oak_log: 12,
+      cobblestone: 22,
+    };
+    for (const [name, limit] of Object.entries(paletteLimits)) {
+      const stats = logicalStats(name);
+      expect(stats.unique, `${name} unique colours`).toBeGreaterThan(3);
+      expect(stats.unique, `${name} unique colours`).toBeLessThanOrEqual(limit);
+      expect(stats.roughPairRatio, `${name} high-contrast neighbours`).toBeLessThan(0.35);
     }
   });
 });

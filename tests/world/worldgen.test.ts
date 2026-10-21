@@ -30,6 +30,8 @@ const STONE = blockNumeric('stone');
 const SAND = blockNumeric('sand');
 const SANDSTONE = blockNumeric('sandstone');
 const SNOW = blockNumeric('snow_block');
+const GRAVEL = blockNumeric('gravel');
+const COARSE_DIRT = blockNumeric('coarse_dirt');
 const GRASS = blockNumeric('grass_block');
 const DIRT = blockNumeric('dirt');
 
@@ -191,7 +193,8 @@ describe('terrain layers', () => {
       }
     }
     expect(beachSurface).not.toBeNull();
-    expect([SAND, SNOW]).toContain(beachSurface);
+    // Rock patches can turn a shoreline column into gravel as well.
+    expect([SAND, SNOW, GRAVEL]).toContain(beachSurface);
   });
 
   it('writes the terrain height into heightMap for every column', () => {
@@ -235,7 +238,7 @@ describe('biomes', () => {
         const cz = Math.floor(wz / 16);
         const raw = generator.generateRaw(cx, cz, seed);
         const surface = columnBlock(raw, wx - cx * 16, height, wz - cz * 16);
-        expect([expected, GRASS, SNOW, STONE, SAND]).toContain(surface);
+        expect([expected, GRASS, SNOW, STONE, SAND, GRAVEL, COARSE_DIRT]).toContain(surface);
         checked++;
       }
     }
@@ -492,3 +495,4 @@ describe('performance budget (PLAN.md §6)', () => {
     expect(perSection).toBeLessThan(8);
   });
 });
+

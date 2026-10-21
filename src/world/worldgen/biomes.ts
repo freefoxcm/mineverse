@@ -124,9 +124,9 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
     surface: AIR_GRASS,
     filler: DIRT,
     tree: 'oak',
-    treeDensity: 0.1,
+    treeDensity: 0.11,
     grassDensity: 0.16,
-    flowerDensity: 0.03,
+    flowerDensity: 0.028,
     deadBushDensity: 0,
     frozen: false,
     snowy: false,
@@ -138,9 +138,9 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
     surface: AIR_GRASS,
     filler: DIRT,
     tree: 'oak',
-    treeDensity: 0.72,
-    grassDensity: 0.22,
-    flowerDensity: 0.04,
+    treeDensity: 0.74,
+    grassDensity: 0.2,
+    flowerDensity: 0.018,
     deadBushDensity: 0,
     frozen: false,
     snowy: false,
@@ -154,7 +154,7 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
     tree: 'birch',
     treeDensity: 0.66,
     grassDensity: 0.2,
-    flowerDensity: 0.03,
+    flowerDensity: 0.015,
     deadBushDensity: 0,
     frozen: false,
     snowy: false,
@@ -167,8 +167,8 @@ export const BIOMES: Record<BiomeId, BiomeDef> = {
     filler: DIRT,
     tree: 'spruce',
     treeDensity: 0.62,
-    grassDensity: 0.1,
-    flowerDensity: 0.01,
+    grassDensity: 0.07,
+    flowerDensity: 0.004,
     deadBushDensity: 0,
     frozen: false,
     snowy: false,
@@ -277,3 +277,5 @@ export function classifyBiome(climate: ClimateSample, height: number, seaLevel =
 
   return 'plains';
 }
+
+

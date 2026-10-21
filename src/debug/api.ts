@@ -77,6 +77,9 @@ export interface DebugContext {
   setThirdPerson(enabled: boolean): void;
   respawn(): void;
   runCommand(text: string): { ok: boolean; message: string };
+  setBlockOutlineVisible(visible: boolean): void;
+  setFlying(enabled: boolean): void;
+  setHandVisible(visible: boolean): void;
 }
 
 export interface DebugApi {
@@ -122,6 +125,9 @@ export interface DebugApi {
   setThirdPerson(enabled: boolean): void;
   respawn(): void;
   runCommand(text: string): { ok: boolean; message: string };
+  setBlockOutlineVisible(visible: boolean): void;
+  setFlying(enabled: boolean): void;
+  setHandVisible(visible: boolean): void;
   readonly world: {
     readonly seed: string;
     readonly time: WorldTime;
@@ -186,6 +192,9 @@ export function installDebugApi(context: DebugContext): DebugApi {
     setThirdPerson: (enabled) => context.setThirdPerson(enabled),
     respawn: () => context.respawn(),
     runCommand: (text) => context.runCommand(text),
+    setBlockOutlineVisible: (visible) => context.setBlockOutlineVisible(visible),
+    setFlying: (enabled) => context.setFlying(enabled),
+    setHandVisible: (visible) => context.setHandVisible(visible),
     world: {
       get seed() {
         return context.getSeed();

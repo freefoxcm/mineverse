@@ -41,7 +41,7 @@ export class ItemIconAtlas {
     texture.format = THREE.RGBAFormat;
     texture.type = THREE.UnsignedByteType;
     texture.magFilter = THREE.NearestFilter;
-    texture.minFilter = THREE.NearestMipmapLinearFilter;
+    texture.minFilter = THREE.NearestMipmapNearestFilter;
     texture.wrapS = THREE.ClampToEdgeWrapping;
     texture.wrapT = THREE.ClampToEdgeWrapping;
     texture.generateMipmaps = true;

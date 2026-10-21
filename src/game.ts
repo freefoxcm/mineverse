@@ -53,6 +53,7 @@ import { blockNumeric, getBlockDef } from './world/blocks';
 import { localIndex, type ChunkColumn } from './world/chunk';
 import { getItem } from './world/items';
 import { World } from './world/world';
+import { createTintResolver, type TintResolver } from './world/worldgen';
 import { ChunkManager } from './world/chunkManager';
 
 const TICK_SECONDS = TICK_MS / 1000;
@@ -169,6 +170,8 @@ export class Game {
   private deathTimer = 0;
   private deathScreenOpen = false;
   private thirdPerson = false;
+  private outlineEnabled = true;
+  private handVisible = true;
   private autoSaveTimer = 0;
   private firstFrame = true;
   private lastHandSignature = '';
@@ -177,6 +180,8 @@ export class Game {
   private fogFar = 94;
   private shake = 0;
   private stepDistance = 0;
+  private waterLayer = 0;
+  private lavaLayer = 0;
   private lastDrawCalls = 0;
   private lastTriangles = 0;
   private currentScreen: UiScreenId = 'none';
@@ -298,6 +303,15 @@ export class Game {
     });
 
     this.renderRadius = Math.min(MAX_BOOT_RENDER_DISTANCE, this.settings.renderDistance);
+    // Mild biome tint on top of finished-colour textures: keeps plains/forest/
+    // desert grass visually distinct without turning dirt sides olive.
+    const biomeTint = createTintResolver(this.world.seedHash);
+    const mildTint: TintResolver = (block, x, z) => {
+      const [r, g, b] = biomeTint(block, x, z);
+      return [Math.round(255 - (255 - r) * 0.45), Math.round(255 - (255 - g) * 0.45), Math.round(255 - (255 - b) * 0.45)];
+    };
+    this.waterLayer = this.atlas.layerOf('water');
+    this.lavaLayer = this.atlas.layerOf('lava');
     this.chunkManager = new ChunkManager({
       world: this.world,
       meshSink: this.chunkRenderer,
@@ -306,9 +320,7 @@ export class Game {
       generatePerFrame: 2,
       meshPerFrame: 16,
       workers: true,
-      // Art tiles are authored in final colours, so biome tint would double-tint them
-      // (grass sides turned olive). Keep vertex tints white until face-aware tinting lands.
-      tintOf: () => [255, 255, 255],
+      tintOf: mildTint,
       applyColumnEdits: (column) => this.editStore.apply(column),
     });
 
@@ -523,7 +535,7 @@ export class Game {
           })
         : { hit: null, progress: 0, breaking: false };
     const stage = interactionResult.breaking ? breakStage(interactionResult.progress) : -1;
-    this.blockOverlay.setTarget(interactionResult.hit, stage, this.atlas);
+    this.blockOverlay.setTarget(this.outlineEnabled ? interactionResult.hit : null, this.outlineEnabled ? stage : -1, this.atlas);
 
     const time = this.world.time();
     this.sky.update(this.renderer.camera, time.timeOfDay, time.daylight);
@@ -542,7 +554,7 @@ export class Game {
     const renderInfo = this.renderer.webgl.info;
     this.lastDrawCalls = renderInfo.render.calls;
     this.lastTriangles = renderInfo.render.triangles;
-    if (gameplayActive && !this.thirdPerson && this.ui.getScreen() === 'none') {
+    if (gameplayActive && !this.thirdPerson && this.handVisible && this.ui.getScreen() === 'none') {
       this.firstPerson.render(this.renderer.webgl, this.renderer.camera);
     }
 
@@ -576,17 +588,23 @@ export class Game {
   private updateMaterials(daylight: number): void {
     const underwater = this.player.eyeInWater;
     const inLava = this.player.eyeInLava;
-    const near = underwater || inLava ? 0.5 : this.renderRadius * 16 * 0.62;
-    const far = underwater ? 22 : inLava ? 3 : this.renderRadius * 16 * 0.98;
+    const near = underwater || inLava ? 0.5 : this.renderRadius * 16 * 0.55;
+    const far = underwater ? 22 : inLava ? 3 : this.renderRadius * 16 * 0.92;
     this.fogNear = near;
     this.fogFar = far;
     this.lastFogColor = inLava ? LAVA_FOG : underwater ? WATER_FOG : this.sky.fogColor;
+    const now = performance.now() * 0.001;
     for (const material of this.materials.all) {
       material.uniforms.uDaylight.value = daylight;
       material.uniforms.uFogColor.value.copy(this.lastFogColor);
       material.uniforms.uFogNear.value = near;
       material.uniforms.uFogFar.value = far;
       material.uniforms.uUnderwater.value = underwater ? 1 : 0;
+      material.uniforms.uTime.value = now;
+      material.uniforms.uWaterLayer.value = this.waterLayer;
+      material.uniforms.uLavaLayer.value = this.lavaLayer;
+      (material.uniforms.uSkyTint.value as THREE.Color).setRGB(1.0, 0.985, 0.95);
+      (material.uniforms.uBlockTint.value as THREE.Color).setRGB(1.0, 0.66, 0.32);
     }
     this.renderer.webgl.setClearColor(this.lastFogColor, 1);
   }
@@ -714,15 +732,15 @@ export class Game {
   private applyThirdPersonCamera(): void {
     const eye = this.player.eyePosition();
     const direction = this.player.lookDirection();
-    const distance = 3.8;
+    const distance = 3.6;
     this.renderer.camera.position.set(
       eye.x - direction.x * distance,
-      eye.y - direction.y * distance + 1.35,
+      eye.y - direction.y * distance + 0.55,
       eye.z - direction.z * distance,
     );
     this.renderer.camera.lookAt(
       this.player.position.x,
-      this.player.position.y + 1.15,
+      this.player.position.y + 1.25,
       this.player.position.z,
     );
   }
@@ -1283,6 +1301,15 @@ export class Game {
       setThirdPerson: (enabled) => this.setThirdPerson(enabled),
       respawn: () => this.respawn(),
       runCommand: (text) => this.executeCommandText(text),
+      setBlockOutlineVisible: (visible) => {
+        this.outlineEnabled = visible;
+      },
+      setFlying: (enabled) => {
+        this.player.flying = enabled;
+      },
+      setHandVisible: (visible) => {
+        this.handVisible = visible;
+      },
     });
   }
 

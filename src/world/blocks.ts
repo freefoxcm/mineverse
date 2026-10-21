@@ -48,6 +48,8 @@ export interface BlockDef {
   sound: BlockSound;
   /** Heat source for the environment (lava/torch/fire). */
   ignites: boolean;
+  /** Randomly rotate face UVs per block position to break texture repetition. */
+  uvVary: boolean;
 }
 
 type BlockSpec = Partial<Omit<BlockDef, 'numeric' | 'id' | 'name' | 'faces'>> & {
@@ -77,6 +79,7 @@ const DEFAULTS: Omit<BlockDef, 'numeric' | 'id' | 'name' | 'faces'> = {
   blastResistance: 1,
   sound: 'stone',
   ignites: false,
+  uvVary: false,
 };
 
 const BLOCK_LIST: BlockDef[] = [];
@@ -386,6 +389,51 @@ export const BLOCK_COUNT = BLOCK_LIST.length;
 export const AIR = 0;
 export const blockById = new Map<string, BlockDef>();
 for (const def of BLOCK_LIST) blockById.set(def.id, def);
+
+// Textures with no directional features can be randomly rotated/flipped per face
+// to break visible tiling on large stone/dirt/sand surfaces.
+const UV_VARY_BLOCKS = [
+  'stone',
+  'granite',
+  'diorite',
+  'andesite',
+  'cobblestone',
+  'mossy_cobblestone',
+  'dirt',
+  'coarse_dirt',
+  'sand',
+  'gravel',
+  'clay',
+  'bedrock',
+  'snow_block',
+  'obsidian',
+  'coal_ore',
+  'oak_leaves',
+  'birch_leaves',
+  'spruce_leaves',
+  'copper_ore',
+  'iron_ore',
+  'gold_ore',
+  'redstone_ore',
+  'lapis_ore',
+  'diamond_ore',
+  'smooth_stone',
+  'white_wool',
+  'red_wool',
+  'yellow_wool',
+  'blue_wool',
+  'black_wool',
+  'coal_block',
+  'iron_block',
+  'gold_block',
+  'diamond_block',
+  'lapis_block',
+  'redstone_block',
+];
+for (const name of UV_VARY_BLOCKS) {
+  const def = blockById.get(name);
+  if (def) def.uvVary = true;
+}
 
 export function getBlockDef(id: BlockId): BlockDef {
   return BLOCK_LIST[id] ?? BLOCK_LIST[0];

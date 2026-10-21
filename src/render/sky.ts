@@ -23,12 +23,12 @@ void main() {
 }
 `;
 
-const DAY_TOP = new THREE.Color(0x4a7fd6);
-const DAY_HORIZON = new THREE.Color(0xbfd8ff);
+const DAY_TOP = new THREE.Color(0x3f7fe0);
+const DAY_HORIZON = new THREE.Color(0xc2dbff);
 const NIGHT_TOP = new THREE.Color(0x02040c);
 const NIGHT_HORIZON = new THREE.Color(0x0b1530);
 const DUSK_TOP = new THREE.Color(0x2a3a78);
-const DUSK_HORIZON = new THREE.Color(0xff8752);
+const DUSK_HORIZON = new THREE.Color(0xff8b52);
 
 function makeSunTexture(): THREE.DataTexture {
   const size = 32;
@@ -80,33 +80,106 @@ function makeMoonTexture(): THREE.DataTexture {
   return texture;
 }
 
+/**
+ * Crisp, blocky cloud layer: 8x8-pixel cells on a 16x16 wraparound grid, then one
+ * smoothing pass so the clouds form chunky connected masses (Minecraft-like)
+ * instead of blurry soft blobs.
+ */
 function makeCloudTexture(): THREE.DataTexture {
-  const size = 64;
+  const cells = 16;
+  const cellSize = 8;
+  const size = cells * cellSize;
   const data = new Uint8Array(size * size * 4);
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4;
-      // A few soft, deterministic cloud blobs.
-      let value = 0;
-      for (let k = 0; k < 5; k++) {
-        const cx = ((k * 17 + 9) % size) - x;
-        const cy = ((k * 29 + 4) % size) - y;
-        const dist = Math.sqrt(cx * cx + cy * cy);
-        value = Math.max(value, 1 - dist / (7 + (k % 3) * 3));
-      }
-      const alpha = clamp01((value - 0.35) * 2.2);
-      data[i] = 255;
-      data[i + 1] = 255;
-      data[i + 2] = 255;
-      data[i + 3] = Math.round(alpha * 190);
+
+  const hash = (x: number, y: number): number => {
+    let h = Math.imul((x % cells + cells) % cells, 0x27d4eb2d) ^ Math.imul((y % cells + cells) % cells, 0x85ebca6b);
+    h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d);
+    h ^= h >>> 12;
+    return (h >>> 0) / 4294967296;
+  };
+
+  const groups = cells / 2;
+  const groupHash = (x: number, y: number): number => {
+    let h = Math.imul((x % groups + groups) % groups, 0x9e3779b1) ^ Math.imul((y % groups + groups) % groups, 0x85ebca77);
+    h = Math.imul(h ^ (h >>> 16), 0x2c1b3c6d);
+    h ^= h >>> 13;
+    return (h >>> 0) / 4294967296;
+  };
+
+  const grid: number[][] = [];
+  for (let y = 0; y < cells; y++) {
+    grid[y] = [];
+    for (let x = 0; x < cells; x++) {
+      // 2x2-cell cloud masses (~60 blocks wide) with slightly eroded edges.
+      const groupPresent = groupHash(Math.floor(x / 2), Math.floor(y / 2)) > 0.74;
+      const wisp = hash(x, y) > 0.94;
+      const eroded = hash(x + 5, y + 7) > 0.22;
+      grid[y][x] = (groupPresent || wisp) && eroded ? 1 : 0;
     }
   }
+  // Only remove single-cell specks; do not grow the pattern into a checkerboard.
+  const smoothed: number[][] = [];
+  for (let y = 0; y < cells; y++) {
+    smoothed[y] = [];
+    for (let x = 0; x < cells; x++) {
+      const n =
+        grid[(y + cells - 1) % cells][x] +
+        grid[(y + 1) % cells][x] +
+        grid[y][(x + cells - 1) % cells] +
+        grid[y][(x + 1) % cells];
+      smoothed[y][x] = grid[y][x] === 1 ? (n >= 1 ? 1 : 0) : 0;
+    }
+  }
+
+  for (let cellY = 0; cellY < cells; cellY++) {
+    for (let cellX = 0; cellX < cells; cellX++) {
+      const present = smoothed[cellY][cellX] === 1;
+      const tone = 232 + Math.floor(hash(cellX + 31, cellY + 17) * 23);
+      for (let py = 0; py < cellSize; py++) {
+        for (let px = 0; px < cellSize; px++) {
+          const x = cellX * cellSize + px;
+          const y = cellY * cellSize + py;
+          const i = (y * size + x) * 4;
+          data[i] = tone;
+          data[i + 1] = tone;
+          data[i + 2] = Math.min(255, tone + 6);
+          data[i + 3] = present ? 190 : 0;
+        }
+      }
+    }
+  }
+
   const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(5, 5);
+  texture.repeat.set(4, 4);
   texture.magFilter = THREE.NearestFilter;
   texture.minFilter = THREE.NearestFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+/** Soft radial glow used behind the sun. */
+function makeGlowTexture(): THREE.DataTexture {
+  const size = 64;
+  const data = new Uint8Array(size * size * 4);
+  const center = (size - 1) / 2;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (x - center) / center;
+      const dy = (y - center) / center;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      const alpha = Math.max(0, 1 - distance) ** 2.2;
+      const i = (y * size + x) * 4;
+      data[i] = 255;
+      data[i + 1] = 238;
+      data[i + 2] = 190;
+      data[i + 3] = Math.round(alpha * 210);
+    }
+  }
+  const texture = new THREE.DataTexture(data, size, size, THREE.RGBAFormat);
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
   texture.needsUpdate = true;
   return texture;
 }
@@ -115,10 +188,11 @@ function makeCloudTexture(): THREE.DataTexture {
 export class Sky {
   readonly group = new THREE.Group();
   readonly fogColor = new THREE.Color(0xbfd8ff);
-  private readonly topColor = new THREE.Color(0x4a7fd6);
-  private readonly horizonColor = new THREE.Color(0xbfd8ff);
+  private readonly topColor = new THREE.Color(0x3f7fe0);
+  private readonly horizonColor = new THREE.Color(0xc2dbff);
   private readonly domeMaterial: THREE.ShaderMaterial;
   private readonly sun: THREE.Sprite;
+  private readonly sunGlow: THREE.Sprite;
   private readonly moon: THREE.Sprite;
   private readonly stars: THREE.Points;
   private readonly starMaterial: THREE.PointsMaterial;
@@ -152,9 +226,23 @@ export class Sky {
         fog: false,
       }),
     );
-    this.sun.scale.setScalar(60);
+    this.sun.scale.setScalar(80);
     this.sun.renderOrder = -90;
     this.group.add(this.sun);
+
+    this.sunGlow = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: makeGlowTexture(),
+        transparent: true,
+        depthWrite: false,
+        depthTest: true,
+        fog: false,
+        blending: THREE.AdditiveBlending,
+      }),
+    );
+    this.sunGlow.scale.setScalar(230);
+    this.sunGlow.renderOrder = -91;
+    this.group.add(this.sunGlow);
 
     this.moon = new THREE.Sprite(
       new THREE.SpriteMaterial({
@@ -165,7 +253,7 @@ export class Sky {
         fog: false,
       }),
     );
-    this.moon.scale.setScalar(40);
+    this.moon.scale.setScalar(50);
     this.moon.renderOrder = -90;
     this.group.add(this.moon);
 
@@ -183,7 +271,7 @@ export class Sky {
     starGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     this.starMaterial = new THREE.PointsMaterial({
       color: 0xffffff,
-      size: 3,
+      size: 2.5,
       sizeAttenuation: false,
       transparent: true,
       opacity: 0,
@@ -199,14 +287,14 @@ export class Sky {
     this.cloudMaterial = new THREE.MeshBasicMaterial({
       map: makeCloudTexture(),
       transparent: true,
-      opacity: 0.82,
+      opacity: 0.9,
       depthWrite: false,
       side: THREE.DoubleSide,
       fog: false,
     });
-    this.clouds = new THREE.Mesh(new THREE.PlaneGeometry(1600, 1600), this.cloudMaterial);
+    this.clouds = new THREE.Mesh(new THREE.PlaneGeometry(2000, 2000), this.cloudMaterial);
     this.clouds.rotation.x = -Math.PI / 2;
-    this.clouds.position.y = 145;
+    this.clouds.position.y = 180;
     this.clouds.renderOrder = 1;
     scene.add(this.clouds);
   }
@@ -224,18 +312,23 @@ export class Sky {
     this.group.position.copy(camera.position);
     const direction = new THREE.Vector3(Math.cos(angle), sunY, 0.22).normalize();
     this.sun.position.copy(direction).multiplyScalar(420);
+    this.sunGlow.position.copy(direction).multiplyScalar(418);
     this.moon.position.copy(direction).multiplyScalar(-420);
     this.sun.visible = sunY > -0.2;
+    this.sunGlow.visible = this.sun.visible;
     this.moon.visible = sunY < 0.25;
     this.sun.material.opacity = clamp01((sunY + 0.2) * 6);
+    this.sunGlow.material.opacity = clamp01((sunY + 0.2) * 6) * 0.55;
     this.moon.material.opacity = clamp01((-sunY + 0.2) * 6);
     this.starMaterial.opacity = clamp01(1 - dayFactor * 1.6);
     this.stars.visible = this.starMaterial.opacity > 0.02;
 
-    this.cloudMaterial.opacity = 0.55 + dayFactor * 0.3;
+    const cloudBrightness = 0.28 + dayFactor * 0.72;
+    this.cloudMaterial.color.setRGB(cloudBrightness, cloudBrightness * 0.99, Math.min(1, cloudBrightness * 1.03));
+    this.cloudMaterial.opacity = 0.55 + dayFactor * 0.2;
     this.clouds.visible = true;
-    this.cloudMaterial.map!.offset.x = (timeOfDay / 24000) * 0.6;
-    this.cloudMaterial.map!.offset.y = (timeOfDay / 24000) * 0.25;
+    this.cloudMaterial.map!.offset.x = (timeOfDay / 24000) * 1.4;
+    this.cloudMaterial.map!.offset.y = (timeOfDay / 24000) * 0.55;
 
     // The dome shader only needs colours; daylight is applied by terrain materials.
     void daylight;

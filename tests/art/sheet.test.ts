@@ -119,67 +119,6 @@ describe('art contact sheets', () => {
     writeSheet('art-cracks.png', cells, 5, 6, TILES.dirt);
   });
 
-  it('writes artifacts/art-tint-preview.png (authored vs biome-tinted look)', () => {
-    // Representative multipliers from World-A's createTintResolver at
-    // temperature=humidity=0.5 - used to show what the mesh tint does to the
-    // authored colours in game.
-    const tints: Record<string, readonly [number, number, number]> = {
-      grass_top: [180, 205, 90],
-      grass_side: [180, 205, 90],
-      tall_grass: [180, 205, 90],
-      oak_leaves: [148, 180, 79],
-      birch_leaves: [148, 180, 79],
-      spruce_leaves: [148, 180, 79],
-      sugar_cane: [148, 180, 79],
-      water: [109, 165, 226],
-    };
-    const names = Object.keys(tints);
-    const scale = 5;
-    const pad = 8;
-    const tilePixels = TILE_SIZE * scale;
-    const width = pad + names.length * (tilePixels + pad);
-    const height = pad + 2 * (tilePixels + pad);
-    const canvas = new Uint8Array(width * height * 4);
-    for (let i = 0; i < canvas.length; i += 4) {
-      canvas[i] = 26;
-      canvas[i + 1] = 28;
-      canvas[i + 2] = 34;
-      canvas[i + 3] = 255;
-    }
-    names.forEach((name, index) => {
-      const painted = paintCell(TILES[name]);
-      const tint = tints[name];
-      for (let row = 0; row < 2; row++) {
-        const originX = pad + index * (tilePixels + pad);
-        const originY = pad + row * (tilePixels + pad);
-        for (let y = 0; y < tilePixels; y++) {
-          for (let x = 0; x < tilePixels; x++) {
-            const source = painted.get(Math.floor(x / scale), Math.floor(y / scale));
-            const alpha = source[3] / 255;
-            let r = source[0];
-            let g = source[1];
-            let b = source[2];
-            if (row === 1) {
-              r = Math.round((r * tint[0]) / 255);
-              g = Math.round((g * tint[1]) / 255);
-              b = Math.round((b * tint[2]) / 255);
-            }
-            const dx = originX + x;
-            const dy = originY + y;
-            const i4 = (dy * width + dx) * 4;
-            const bg = [26, 28, 34];
-            blendOver(canvas, i4, [r, g, b, Math.round(alpha * 255)], bg);
-          }
-        }
-      }
-    });
-    fs.mkdirSync(path.join(process.cwd(), 'artifacts'), { recursive: true });
-    fs.writeFileSync(
-      path.join(process.cwd(), 'artifacts', 'art-tint-preview.png'),
-      encodePng(width, height, canvas),
-    );
-  });
-
   it('writes artifacts/art-focus.png for the high-risk tiles', () => {
     const focus = [
       'grass_top',
@@ -216,6 +155,10 @@ describe('art contact sheets', () => {
       'furnace_front_lit',
       'torch',
       'poppy',
+      'dandelion',
+      'tall_grass',
+      'sugar_cane',
+      'dead_bush',
       'cactus_side',
       'crafting_table_side',
     ];
@@ -267,6 +210,91 @@ describe('art contact sheets', () => {
       path.join(process.cwd(), 'artifacts', 'art-mobs-index.txt'),
       names.map((name, index) => `${String(index).padStart(3, '0')} ${name}`).join('\n'),
     );
+  });
+
+  it('writes artifacts/art-tiles-mip.png (simulated 16px mipmap level)', () => {
+    const names = Object.keys(TILES).sort();
+    const scale = 5;
+    const pad = 4;
+    const cell = 16 * scale + pad;
+    const columns = 12;
+    const rows = Math.ceil(names.length / columns);
+    const width = pad + columns * cell;
+    const height = pad + rows * cell;
+    const canvas = new Uint8Array(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        const light = (Math.floor(x / 8) + Math.floor(y / 8)) % 2 === 0;
+        canvas[i] = light ? 62 : 44;
+        canvas[i + 1] = light ? 65 : 47;
+        canvas[i + 2] = light ? 70 : 52;
+        canvas[i + 3] = 255;
+      }
+    }
+    names.forEach((name, index) => {
+      const painted = paintCell(TILES[name]);
+      const originX = pad + (index % columns) * cell;
+      const originY = pad + Math.floor(index / columns) * cell;
+      for (let y = 0; y < 16 * scale; y++) {
+        for (let x = 0; x < 16 * scale; x++) {
+          // take the top-left sample of each logical pixel = the 16x16 art
+          const source = painted.get(Math.floor(x / scale) * 2, Math.floor(y / scale) * 2);
+          blendOver(canvas, ((originY + y) * width + originX + x) * 4, source, [62, 65, 70]);
+        }
+      }
+    });
+    fs.mkdirSync(path.join(process.cwd(), 'artifacts'), { recursive: true });
+    fs.writeFileSync(path.join(process.cwd(), 'artifacts', 'art-tiles-mip.png'), encodePng(width, height, canvas));
+  });
+
+  it('writes artifacts/art-tiling.png (3x3 tiling seam check)', () => {
+    const names = [
+      'grass_top',
+      'stone',
+      'sand',
+      'water',
+      'oak_log',
+      'cobblestone',
+      'dirt',
+      'gravel',
+      'oak_leaves',
+    ];
+    const reps = 3;
+    const scale = 3;
+    const pad = 8;
+    const cell = 16 * reps * scale + pad;
+    const columns = 3;
+    const rows = Math.ceil(names.length / columns);
+    const width = pad + columns * cell;
+    const height = pad + rows * cell;
+    const canvas = new Uint8Array(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = (y * width + x) * 4;
+        const light = (Math.floor(x / 8) + Math.floor(y / 8)) % 2 === 0;
+        canvas[i] = light ? 46 : 34;
+        canvas[i + 1] = light ? 48 : 36;
+        canvas[i + 2] = light ? 54 : 40;
+        canvas[i + 3] = 255;
+      }
+    }
+    names.forEach((name, index) => {
+      const painted = paintCell(TILES[name]);
+      const originX = pad + (index % columns) * cell;
+      const originY = pad + Math.floor(index / columns) * cell;
+      const tilePx = 16 * reps * scale;
+      for (let y = 0; y < tilePx; y++) {
+        for (let x = 0; x < tilePx; x++) {
+          const lx = Math.floor(x / scale) % 16;
+          const ly = Math.floor(y / scale) % 16;
+          const source = painted.get(lx * 2, ly * 2);
+          blendOver(canvas, ((originY + y) * width + originX + x) * 4, source, [62, 65, 70]);
+        }
+      }
+    });
+    fs.mkdirSync(path.join(process.cwd(), 'artifacts'), { recursive: true });
+    fs.writeFileSync(path.join(process.cwd(), 'artifacts', 'art-tiling.png'), encodePng(width, height, canvas));
   });
 
   it('writes artifacts/art-logo.png', () => {

@@ -17,7 +17,7 @@
  */
 import { SEA_LEVEL, WORLD_HEIGHT } from '../../core/config';
 import { Rand, hash2f, hash2i } from '../../core/rng';
-import { IS_REPLACEABLE, TINT_KIND, blockNumeric } from '../blocks';
+import { IS_REPLACEABLE, IS_SOLID, TINT_KIND, blockNumeric } from '../blocks';
 import { localIndex, type ChunkColumn } from '../chunk';
 import type { ColumnGenerator } from '../world';
 import { biomeDef, classifyBiome, type BiomeId, type ClimateSample } from './biomes';
@@ -34,6 +34,7 @@ const DIRT = blockNumeric('dirt');
 const SAND = blockNumeric('sand');
 const SANDSTONE = blockNumeric('sandstone');
 const GRAVEL = blockNumeric('gravel');
+const COARSE_DIRT = blockNumeric('coarse_dirt');
 const CLAY = blockNumeric('clay');
 const SNOW = blockNumeric('snow_block');
 const ICE = blockNumeric('ice');
@@ -67,6 +68,9 @@ const SALT = {
   ores: 0x6a09e667,
   plants: 0x2f6a3c11,
   flowers: 0x4c9eea27,
+  flowerCluster: 0x3ac7f4d1,
+  surfacePatch: 0x756d7e2b,
+  rockPatch: 0x6f1c2a9d,
   reeds: 0x1a7f3b63,
   bedrock: 0x0badf00d,
   oceanFloor: 0x5eed5eed,
@@ -344,10 +348,28 @@ export class TerrainGenerator implements ColumnGenerator {
           else if (patch < 0.4) surface = GRAVEL;
           filler = SAND;
         } else if (nearWater) {
-          surface = sample.climate.temperature < 0.3 ? SNOW : SAND;
+          // Pebble pockets along the waterline break up the pure sand beach.
+          if (sample.climate.temperature < 0.3) surface = SNOW;
+          else surface = hash2f((seed ^ SALT.rockPatch) | 0, wx, wz) < 0.14 ? GRAVEL : SAND;
           filler = SAND;
         } else if (def.mountain && height >= MOUNTAIN_SNOW_LINE) {
           surface = SNOW;
+        } else if (!def.snowy && !def.ocean && height > seaLevel + 2) {
+          // Bare stone / gravel / coarse-dirt patches on cliffs, highlands and mountain
+          // slopes. Only the top block changes, so nothing ever floats; the slope is
+          // measured on the analytic height field, not on generated blocks.
+          const patch = fbm2((seed ^ SALT.surfacePatch) | 0, wx / 11, wz / 11, 2);
+          if (patch > 0.58) {
+            const slope =
+              Math.abs(height - sampleAt(wx + 1, wz).height) + Math.abs(height - sampleAt(wx, wz + 1).height);
+            const rocky = def.mountain || height > 88 || slope >= 3;
+            if (rocky) {
+              const roll = hash2f((seed ^ SALT.rockPatch) | 0, wx, wz);
+              if (def.mountain || slope >= 5 || roll < 0.4) surface = STONE;
+              else if (roll < 0.78) surface = GRAVEL;
+              else surface = COARSE_DIRT;
+            }
+          }
         }
 
         for (let y = 0; y <= height; y++) {
@@ -433,7 +455,14 @@ export class TerrainGenerator implements ColumnGenerator {
             const index = localIndex(lx, wy, lz);
             const existing = blocks[index];
             if (trunk) {
-              if (existing === AIR || IS_REPLACEABLE[existing] === 1 || LEAF_TABLE[existing] === 1) {
+              // Logs may replace plants/leaves and, for the buried base block, the
+              // surface solid (a tree must never float above the ground).
+              if (
+                existing === AIR ||
+                IS_REPLACEABLE[existing] === 1 ||
+                LEAF_TABLE[existing] === 1 ||
+                IS_SOLID[existing] === 1
+              ) {
                 blocks[index] = block;
               }
             } else if (existing === AIR) {
@@ -458,13 +487,19 @@ export class TerrainGenerator implements ColumnGenerator {
         const ground = blocks[localIndex(x, height, z)];
 
         if (ground === GRASS) {
-          const roll = hash2f((seed ^ SALT.plants) | 0, wx, wz);
-          const grass = def.grassDensity;
-          const flowers = def.flowerDensity;
-          if (roll < grass) {
+          const grassRoll = hash2f((seed ^ SALT.plants) | 0, wx, wz);
+          if (grassRoll < def.grassDensity) {
             blocks[above] = TALL_GRASS;
-          } else if (roll < grass + flowers) {
-            blocks[above] = hash2f((seed ^ SALT.flowers) | 0, wx, wz) < 0.5 ? POPPY : DANDELION;
+          } else {
+            // Flowers grow in clusters (patch noise) instead of an even sprinkle, so
+            // plains/forest meadows read as flower fields rather than noise.
+            const cluster = fbm2((seed ^ SALT.flowerCluster) | 0, wx / 9, wz / 9, 2);
+            const patchBoost = 0.16 + smoothstep(0.46, 0.68, cluster) * 2.7;
+            const flowerChance = def.flowerDensity * patchBoost;
+            const flowerRoll = hash2f((seed ^ SALT.flowers) | 0, wx, wz);
+            if (flowerRoll < flowerChance) {
+              blocks[above] = flowerRoll < flowerChance * 0.45 ? POPPY : DANDELION;
+            }
           }
         } else if (ground === SAND && def.deadBushDensity > 0) {
           const roll = hash2f((seed ^ SALT.plants + 7) | 0, wx, wz);
