@@ -15,14 +15,26 @@ export interface BlockChangeEvent {
 }
 
 /**
- * World generation placeholder used by M0. The real multi-noise terrain generator
- * (workers, biomes, caves, ores) replaces `generateColumn` during M1.
+ * Pluggable terrain generator. M1's multi-noise generator (with workers) implements
+ * this; the M0 placeholder below keeps the engine runnable in the meantime.
+ */
+export interface ColumnGenerator {
+  generate(column: ChunkColumn, seedHash: number): void;
+}
+
+/**
+ * World container: owns loaded chunk columns, block access, time and edit deltas.
+ * Chunk streaming/lighting are driven by the ChunkManager (World-A) which plugs in a
+ * ColumnGenerator and an incremental light updater.
  */
 export class World implements WorldView {
   readonly columns = new Map<string, ChunkColumn>();
   readonly seed: string;
   readonly seedHash: number;
   private tickCount = 0;
+  generator: ColumnGenerator | null = null;
+  /** Replaces the placeholder whole-column light recompute once lighting.ts lands. */
+  lightUpdater: ((column: ChunkColumn, x: number, y: number, z: number) => void) | null = null;
 
   onBlockChanged?: (event: BlockChangeEvent) => void;
   onColumnGenerated?: (column: ChunkColumn) => void;
@@ -45,10 +57,25 @@ export class World implements WorldView {
     const existing = this.columns.get(key);
     if (existing) return existing;
     const column = new ChunkColumn(cx, cz);
-    this.generateColumn(column);
+    if (this.generator) this.generator.generate(column, this.seedHash);
+    else this.generateColumn(column);
     this.computeColumnLight(column);
     this.columns.set(key, column);
     this.onColumnGenerated?.(column);
+    return column;
+  }
+
+  /** Registers a fully generated column (worker output). Edits are applied by the caller. */
+  insertColumn(column: ChunkColumn): void {
+    this.columns.set(chunkKey(column.cx, column.cz), column);
+    this.onColumnGenerated?.(column);
+  }
+
+  /** Removes a column from the loaded set (its edits are expected to be queued already). */
+  removeColumn(cx: number, cz: number): ChunkColumn | undefined {
+    const key = chunkKey(cx, cz);
+    const column = this.columns.get(key);
+    if (column) this.columns.delete(key);
     return column;
   }
 
@@ -217,8 +244,9 @@ export class World implements WorldView {
     column.meta[index] = meta;
     column.edits.set(index, { id, meta });
     column.version++;
-    // M0: recompute the whole column light and mark nearby sections dirty.
-    this.computeColumnLight(column);
+    // Placeholder lighting: the ChunkManager installs an incremental light updater.
+    if (this.lightUpdater) this.lightUpdater(column, x, y, z);
+    else this.computeColumnLight(column);
     for (let dy = -1; dy <= 1; dy++) column.markSectionDirty(y + dy);
     if (lx === 0) this.column(cx - 1, cz)?.markSectionDirty(y);
     if (lx === 15) this.column(cx + 1, cz)?.markSectionDirty(y);
