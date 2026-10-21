@@ -28,7 +28,7 @@ import type { Slot } from '../core/types';
 import { blockNumeric, faceTexture, getBlockDef, type BlockDef } from '../world/blocks';
 import { getItem, type ItemDef } from '../world/items';
 import type { TextureAtlas } from './atlas';
-import { createArmModel, createHeldFist, type ArmModel } from './armModel';
+import { createArmModel, type ArmModel } from './armModel';
 import { HeldItemGeometryCache, heldCategory, type HeldCategory } from './heldItem';
 
 export type HandSwingKind = 'attack' | 'place';
@@ -113,8 +113,8 @@ export const HELD_POSES: Readonly<Record<HeldCategory, HandPose>> = {
 /** Initial tilt of the 3D item itself, so the extruded side is always visible. */
 const HELD_ITEM_ROTATIONS: Readonly<Record<HeldCategory, Vec3Tuple>> = {
   block: [-0.12, -0.62, 0.06],
-  tool: [-0.04, -0.34, 0.12],
-  weapon: [-0.04, -0.28, 0.38],
+  tool: [-0.05, -0.3, -0.42],
+  weapon: [-0.05, -0.28, 0.02],
   food: [-0.06, -0.34, 0.12],
   material: [-0.04, -0.38, 0.12],
   other: [-0.04, -0.38, 0.12],
@@ -353,7 +353,6 @@ export class FirstPersonHand {
   private readonly itemCache = new HeldItemGeometryCache();
   private itemRoot: THREE.Group | null = null;
   private itemMesh: THREE.Mesh | null = null;
-  private itemFist: THREE.Group | null = null;
   private itemGeometryOwned = false;
 
   private currentItemId: string | null = null;
@@ -403,14 +402,6 @@ export class FirstPersonHand {
   private clearItem(): void {
     if (!this.itemRoot) return;
     this.handRoot.remove(this.itemRoot);
-    if (this.itemFist) {
-      const geometries = new Set<THREE.BufferGeometry>();
-      this.itemFist.traverse((object) => {
-        if (object instanceof THREE.Mesh) geometries.add(object.geometry);
-      });
-      for (const geometry of geometries) geometry.dispose();
-      this.itemFist = null;
-    }
     if (this.itemGeometryOwned && this.itemMesh) this.itemMesh.geometry.dispose();
     this.itemRoot = null;
     this.itemMesh = null;
@@ -423,9 +414,13 @@ export class FirstPersonHand {
     this.currentCategory = null;
     const itemId = this.currentItemId;
     if (!itemId) {
+      this.armModel.setHolding(false);
       this.arm.visible = true;
       return;
     }
+    this.armModel.setHolding(true);
+    // Vanilla hides the arm behind the item model in first person: only the
+    // item is visible at the bottom-right. (Empty hand still shows the arm.)
     this.arm.visible = false;
     const item = getItem(itemId) ?? null;
     const category = heldCategory(itemId);
@@ -469,20 +464,14 @@ export class FirstPersonHand {
     const root = new THREE.Group();
     root.rotation.set(...HELD_ITEM_ROTATIONS[category]);
     const itemMesh = new THREE.Mesh(geometry, material);
-    itemMesh.scale.setScalar(scale);
-    itemMesh.position.set(-grip[0] * scale, -grip[1] * scale, -grip[2] * scale);
+    const drawScale = kind === 'sprite' ? scale * 1.2 : scale;
+    itemMesh.scale.setScalar(drawScale);
+    itemMesh.position.set(-grip[0] * drawScale, -grip[1] * drawScale, -grip[2] * drawScale);
     root.add(itemMesh);
-
-    // A visible fist around the grip point sells the 3D hold.
-    const fist = createHeldFist(this.armModel.materials.arm, category === 'block' ? 0.78 : 0.62);
-    fist.position.set(0, -0.015, 0.03);
-    fist.rotation.set(0.22, -0.3, 0.16);
-    root.add(fist);
 
     this.handRoot.add(root);
     this.itemRoot = root;
     this.itemMesh = itemMesh;
-    this.itemFist = fist;
     this.currentItemKind = kind;
     this.currentCategory = category;
   }

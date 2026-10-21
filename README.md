@@ -16,6 +16,7 @@
 | ![高空景观](docs/screenshots/hero-aerial.png) | ![日落](docs/screenshots/sunset.png) |
 | ![空手手臂](docs/screenshots/hand.png) | ![手持镐](docs/screenshots/held-pickaxe.png) |
 | ![手持方块](docs/screenshots/held-block.png) | ![手持剑](docs/screenshots/held-sword.png) |
+| ![牛/羊/猪/鸡](docs/screenshots/mobs.png) | ![手持苹果](docs/screenshots/held-apple.png) |
 | ![夜晚生物](docs/screenshots/night-mobs.png) | ![洞穴与火把](docs/screenshots/cave.png) |
 | ![第三人称](docs/screenshots/third-person.png) | ![水下](docs/screenshots/underwater.png) |
 | ![背包与合成](docs/screenshots/inventory.png) | ![创造物品栏](docs/screenshots/creative.png) |

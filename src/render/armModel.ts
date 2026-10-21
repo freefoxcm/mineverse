@@ -31,6 +31,9 @@ export interface ArmMaterials {
 export interface ArmModel {
   readonly group: THREE.Group;
   readonly materials: ArmMaterials;
+  /** Hand grip point in handRoot space (arm scale applied). */
+  readonly handAnchor: THREE.Vector3;
+  setHolding(holding: boolean): void;
   dispose(): void;
 }
 
@@ -215,7 +218,6 @@ export function createArmModel(): ArmModel {
   const fist = createKnuckleFist(arm.material);
   group.add(fist);
   group.scale.setScalar(0.68);
-
   const materials: ArmMaterials = {
     arm: arm.material,
     sleeve: sleeve.material,
@@ -225,6 +227,8 @@ export function createArmModel(): ArmModel {
     },
   };
   materials.setLight(1);
+
+  const handAnchor = new THREE.Vector3(0, 0, -0.16 * 0.68);
 
   const dispose = (): void => {
     const geometries = new Set<THREE.BufferGeometry>();
@@ -238,5 +242,13 @@ export function createArmModel(): ArmModel {
     sleeveTexture.dispose();
   };
 
-  return { group, materials, dispose };
+  return {
+    group,
+    materials,
+    handAnchor,
+    setHolding(holding: boolean): void {
+      fist.visible = !holding;
+    },
+    dispose,
+  };
 }

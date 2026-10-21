@@ -316,16 +316,16 @@ const PIG_MODEL: MobModelDef = {
   eyeHeight: 0.75,
   walkCycle: 1.2,
   parts: [
-    headPart('head', 'pig_head', [0, 0.55, 0.45], [0, 0.15, 0.1], [0.5, 0.5, 0.5]),
+    headPart('head', 'pig_head', [0, 0.55, 0.52], [0, 0.06, 0.12], [0.5, 0.5, 0.5]),
     {
       name: 'body',
       texture: 'pig_body',
       pivot: [0, 0.25, 0],
       size: [0.625, 0.5, 0.9],
-      offset: [0, 0.25, 0],
+      offset: [0, 0.3, 0],
       swing: 'none',
     },
-    ...buildQuadrupedLegs('pig_leg', 0.2, 0.3, 0.3, 0.3),
+    ...buildQuadrupedLegs('pig_leg', 0.2, 0.3, 0.625, 0.9),
   ],
 };
 
@@ -340,21 +340,21 @@ const COW_MODEL: MobModelDef = {
   eyeHeight: 1.2,
   walkCycle: 0.9,
   parts: [
-    headPart('head', 'cow_head', [0, 1.05, 0.55], [0, 0.15, 0.1], [0.5, 0.5, 0.5]),
+    headPart('head', 'cow_head', [0, 0.95, 0.65], [0, 0.02, 0.16], [0.5, 0.5, 0.38]),
     {
       name: 'horn_left',
       texture: 'cow_horn',
-      pivot: [0, 1.3, 0.6],
-      size: [0.12, 0.12, 0.12],
-      offset: [0.27, 0.1, 0],
+      pivot: [0.27, 1.18, 0.78],
+      size: [0.14, 0.14, 0.14],
+      offset: [0, 0, 0],
       swing: 'none',
     },
     {
       name: 'horn_right',
       texture: 'cow_horn',
-      pivot: [0, 1.3, 0.6],
-      size: [0.12, 0.12, 0.12],
-      offset: [-0.27, 0.1, 0],
+      pivot: [-0.27, 1.18, 0.78],
+      size: [0.14, 0.14, 0.14],
+      offset: [0, 0, 0],
       swing: 'none',
     },
     {
@@ -362,10 +362,10 @@ const COW_MODEL: MobModelDef = {
       texture: 'cow_body',
       pivot: [0, 0.45, 0],
       size: [0.7, 0.7, 1.15],
-      offset: [0, 0.35, 0],
+      offset: [0, 0.45, 0],
       swing: 'none',
     },
-    ...buildQuadrupedLegs('cow_leg', 0.25, 0.45, 0.4, 0.45),
+    ...buildQuadrupedLegs('cow_leg', 0.25, 0.55, 0.7, 1.15),
   ],
 };
 
@@ -380,7 +380,7 @@ const SHEEP_MODEL: MobModelDef = {
   eyeHeight: 1.05,
   walkCycle: 1.1,
   parts: [
-    headPart('head', 'sheep_head', [0, 0.95, 0.5], [0, 0.15, 0.1], [0.45, 0.45, 0.45]),
+    headPart('head', 'sheep_head', [0, 0.83, 0.62], [0, 0.04, 0.13], [0.45, 0.45, 0.45]),
     {
       name: 'body',
       texture: 'sheep_wool',
@@ -389,7 +389,7 @@ const SHEEP_MODEL: MobModelDef = {
       offset: [0, 0.35, 0],
       swing: 'none',
     },
-    ...buildQuadrupedLegs('sheep_leg', 0.25, 0.4, 0.35, 0.4),
+    ...buildQuadrupedLegs('sheep_leg', 0.25, 0.4, 0.75, 1),
   ],
 };
 
@@ -473,19 +473,27 @@ function buildQuadrupedLegs(
   texture: string,
   legWidth: number,
   legHeight: number,
-  zFront: number,
-  zBack: number,
+  bodyWidth: number,
+  bodyDepth: number,
 ): ModelPart[] {
+  // Vanilla quadrupeds stand on four corner legs. Previously the legs were all
+  // placed at ±legWidth/2, which bunched them under the torso and made cows /
+  // sheep look like they had two stubby legs.
+  const x = Math.max(legWidth / 2, bodyWidth / 2 - legWidth / 2 - 0.02);
+  // Front legs sit slightly more forward than the back pair, matching the
+  // vanilla quadruped rig (cow: z +7px / -5px).
+  const zFront = bodyDepth * 0.38;
+  const zBack = -bodyDepth * 0.28;
   const bodies: Array<[string, number, number, number]> = [
-    ['leg_front_left', legWidth / 2, zFront, 0],
-    ['leg_front_right', -legWidth / 2, zFront, Math.PI],
-    ['leg_back_left', legWidth / 2, zBack, Math.PI],
-    ['leg_back_right', -legWidth / 2, zBack, 0],
+    ['leg_front_left', x, zFront, 0],
+    ['leg_front_right', -x, zFront, Math.PI],
+    ['leg_back_left', x, zBack, Math.PI],
+    ['leg_back_right', -x, zBack, 0],
   ];
-  return bodies.map(([name, x, z, phase]) => ({
+  return bodies.map(([name, px, pz, phase]) => ({
     name,
     texture,
-    pivot: [x, legHeight, z] as const,
+    pivot: [px, legHeight, pz] as const,
     size: [legWidth, legHeight, legWidth] as const,
     offset: [0, -legHeight / 2, 0] as const,
     swing: 'leg' as const,

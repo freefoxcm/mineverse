@@ -400,6 +400,44 @@ function stopProcess(child) {
     await wait(500);
     await shot('night-mobs');
 
+    // Passive mob lineup for model/proportion review (flat stone platform so legs
+    // and head pivots are actually visible).
+    await evaluate(() => {
+      const mc = window.__MC__;
+      mc.clearEntities();
+      const p = mc.player.position;
+      const yaw = mc.player.yaw;
+      const dx = -Math.sin(yaw);
+      const dz = -Math.cos(yaw);
+      const sx = Math.cos(yaw);
+      const sz = -Math.sin(yaw);
+      const baseX = Math.round(p.x + dx * 6);
+      const baseZ = Math.round(p.z + dz * 6);
+      const baseY = Math.floor(p.y);
+      const stone = mc.blockId('stone');
+      for (let ox = -7; ox <= 7; ox++) {
+        for (let oz = -8; oz <= 8; oz++) {
+          mc.setBlock(baseX + ox, baseY - 1, baseZ + oz, stone);
+          mc.setBlock(baseX + ox, baseY, baseZ + oz, 0);
+          mc.setBlock(baseX + ox, baseY + 1, baseZ + oz, 0);
+        }
+      }
+      mc.teleport(baseX - dx * 3 + 0.5, baseY, baseZ - dz * 3 + 0.5);
+      mc.setTime(4000);
+      const place = (type, forward, side) => mc.spawnMob(type, baseX + dx * forward + sx * side + 0.5, baseY, baseZ + dz * forward + sz * side + 0.5);
+      place('cow', 4, -3);
+      place('sheep', 4, 0);
+      place('pig', 4, 3);
+      place('chicken', 3, 5);
+      mc.look(mc.player.yaw, -0.06);
+    });
+    await wait(1000);
+    const mobSnapshot = await evaluate(() =>
+      window.__MC__.entitySnapshots().map((snapshot) => ({ type: snapshot.type, x: snapshot.position.x, y: snapshot.position.y, z: snapshot.position.z })),
+    );
+    console.log('[photos] mob lineup:', JSON.stringify(mobSnapshot));
+    await shot('mobs');
+
     // Explosion.
     await evaluate(() => {
       const mc = window.__MC__;
