@@ -263,6 +263,26 @@ function stopProcess(child) {
     }, scenic);
     await wait(600);
     await shot('hand');
+
+    // Held-item 3D views: starter kit slots 0..7 (pickaxe/axe/sword/torch/
+    // planks/cobble/crafting table/apple), slot 8 is empty.
+    for (const [slot, name] of [
+      [0, 'held-pickaxe'],
+      [2, 'held-sword'],
+      [4, 'held-block'],
+      [7, 'held-apple'],
+    ]) {
+      await evaluate((slotIndex) => {
+        window.__MC__.setHandVisible(true);
+        window.__MC__.selectSlot(slotIndex);
+      }, slot);
+      await wait(450);
+      await shot(name);
+    }
+    await evaluate(() => {
+      window.__MC__.setHandVisible(false);
+      window.__MC__.selectSlot(8);
+    });
     await evaluate(() => {
       window.__MC__.setHandVisible(false);
       window.__MC__.selectSlot(0);

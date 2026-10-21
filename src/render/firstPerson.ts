@@ -28,6 +28,8 @@ import type { Slot } from '../core/types';
 import { blockNumeric, faceTexture, getBlockDef, type BlockDef } from '../world/blocks';
 import { getItem, type ItemDef } from '../world/items';
 import type { TextureAtlas } from './atlas';
+import { createArmModel, createHeldFist, type ArmModel } from './armModel';
+import { HeldItemGeometryCache, heldCategory, type HeldCategory } from './heldItem';
 
 export type HandSwingKind = 'attack' | 'place';
 
@@ -78,6 +80,44 @@ export const HAND_POSES: Readonly<Record<'block' | 'sprite' | 'arm', HandPose>> 
     position: [0.52, -0.5, -1.05],
     rotation: [0.35, 0.25, -0.5],
   },
+};
+
+/** Held-item hand pose per item category (V4 3D rig). */
+export const HELD_POSES: Readonly<Record<HeldCategory, HandPose>> = {
+  block: {
+    position: [0.54, -0.35, -0.82],
+    rotation: [0.18, -0.42, 0.05],
+  },
+  tool: {
+    position: [0.5, -0.34, -0.78],
+    rotation: [0.08, -0.34, 0.16],
+  },
+  weapon: {
+    position: [0.5, -0.34, -0.78],
+    rotation: [0.04, -0.3, 0.24],
+  },
+  food: {
+    position: [0.47, -0.36, -0.74],
+    rotation: [0.08, -0.26, 0.12],
+  },
+  material: {
+    position: [0.5, -0.34, -0.78],
+    rotation: [0.06, -0.32, 0.14],
+  },
+  other: {
+    position: [0.5, -0.34, -0.78],
+    rotation: [0.06, -0.32, 0.14],
+  },
+};
+
+/** Initial tilt of the 3D item itself, so the extruded side is always visible. */
+const HELD_ITEM_ROTATIONS: Readonly<Record<HeldCategory, Vec3Tuple>> = {
+  block: [-0.12, -0.62, 0.06],
+  tool: [-0.04, -0.34, 0.12],
+  weapon: [-0.04, -0.28, 0.38],
+  food: [-0.06, -0.34, 0.12],
+  material: [-0.04, -0.38, 0.12],
+  other: [-0.04, -0.38, 0.12],
 };
 
 /** Held-item world scale: block ≈25% screen height, sprite icons ≈23%. */
@@ -209,6 +249,11 @@ function pushFace(
   indices.push(vertexOffset, vertexOffset + 2, vertexOffset + 3);
 }
 
+/** Per-face brightness for held blocks so a cube never reads as a flat card. */
+export const BLOCK_FACE_SHADE: readonly [number, number, number, number, number, number] = [
+  0.74, 0.66, 1.0, 0.52, 0.88, 0.78,
+];
+
 /** Build the held-block cube geometry (unit cube centered at the origin). */
 export function buildBlockGeometry(
   block: BlockDef,
@@ -224,7 +269,9 @@ export function buildBlockGeometry(
   for (let face = 0; face < 6; face++) {
     const layer = layerOf(faceTexture(block, face));
     faceLayers.push(layer);
-    pushFace(positions, uvs, layers, tints, indices, CUBE_FACES[face], layer, tint, face * 4);
+    const shade = BLOCK_FACE_SHADE[face];
+    const faceTint: Vec3Tuple = [tint[0] * shade, tint[1] * shade, tint[2] * shade];
+    pushFace(positions, uvs, layers, tints, indices, CUBE_FACES[face], layer, faceTint, face * 4);
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -287,6 +334,7 @@ function createHandMaterial(texture: THREE.DataArrayTexture): THREE.ShaderMateri
     },
     vertexShader: HAND_VERTEX_SHADER,
     fragmentShader: HAND_FRAGMENT_SHADER,
+    side: THREE.DoubleSide,
   });
 }
 
@@ -301,10 +349,16 @@ export class FirstPersonHand {
   private readonly fallbackMaterial: THREE.MeshBasicMaterial;
   private readonly handRoot = new THREE.Group();
   private readonly arm: THREE.Group;
+  private readonly armModel: ArmModel;
+  private readonly itemCache = new HeldItemGeometryCache();
+  private itemRoot: THREE.Group | null = null;
   private itemMesh: THREE.Mesh | null = null;
+  private itemFist: THREE.Group | null = null;
+  private itemGeometryOwned = false;
 
   private currentItemId: string | null = null;
   private currentItemKind: HandItemKind = 'none';
+  private currentCategory: HeldCategory | null = null;
   private equipProgress = 1;
   private swingTime = 1;
   private swingKind: HandSwingKind = 'attack';
@@ -327,38 +381,10 @@ export class FirstPersonHand {
     if (this.spriteMaterial && options.itemLayerOf) this.itemLayerOf = options.itemLayerOf;
     this.fallbackMaterial = new THREE.MeshBasicMaterial({ color: 0x9a9a9a });
 
-    // Bare arm shown when the hand is empty: a shaded forearm + fist + shirt
-    // sleeve, angled from the bottom-right corner (Minecraft always shows the
-    // player's arm in first person). The pose is animated on handRoot in update().
-    const skinMaterials = (): THREE.MeshBasicMaterial[] => [
-      new THREE.MeshBasicMaterial({ color: 0xc08463 }),
-      new THREE.MeshBasicMaterial({ color: 0xb87b5b }),
-      new THREE.MeshBasicMaterial({ color: 0xd59a76 }),
-      new THREE.MeshBasicMaterial({ color: 0x9d6a4c }),
-      new THREE.MeshBasicMaterial({ color: 0xcb8f6b }),
-      new THREE.MeshBasicMaterial({ color: 0xa87354 }),
-    ];
-    const shirtMaterials = (): THREE.MeshBasicMaterial[] => [
-      new THREE.MeshBasicMaterial({ color: 0x2c8791 }),
-      new THREE.MeshBasicMaterial({ color: 0x277b84 }),
-      new THREE.MeshBasicMaterial({ color: 0x3599a4 }),
-      new THREE.MeshBasicMaterial({ color: 0x1e666e }),
-      new THREE.MeshBasicMaterial({ color: 0x2f8f99 }),
-      new THREE.MeshBasicMaterial({ color: 0x256f78 }),
-    ];
-    const armGroup = new THREE.Group();
-    const forearm = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.3), skinMaterials());
-    forearm.position.set(0, 0, 0.02);
-    const fist = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.11, 0.13), skinMaterials());
-    fist.position.set(0, 0.006, -0.19);
-    const thumb = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.05, 0.06), skinMaterials());
-    thumb.position.set(-0.06, 0.035, -0.17);
-    thumb.rotation.z = 0.25;
-    const sleeve = new THREE.Mesh(new THREE.BoxGeometry(0.125, 0.125, 0.1), shirtMaterials());
-    sleeve.position.set(0, 0, 0.19);
-    armGroup.add(forearm, fist, thumb, sleeve);
-    armGroup.scale.setScalar(0.78);
-    this.arm = armGroup;
+    // Empty-hand arm: tapered forearm, textured skin, sleeve/cuff and a fist.
+    this.armModel = createArmModel();
+    this.arm = this.armModel.group;
+    this.arm.scale.setScalar(1);
     this.handRoot.add(this.arm);
 
     this.scene.add(this.handRoot);
@@ -374,13 +400,27 @@ export class FirstPersonHand {
     this.equipProgress = 0;
   }
 
-  private rebuildItem(): void {
-    if (this.itemMesh) {
-      this.handRoot.remove(this.itemMesh);
-      this.itemMesh.geometry.dispose();
-      this.itemMesh = null;
+  private clearItem(): void {
+    if (!this.itemRoot) return;
+    this.handRoot.remove(this.itemRoot);
+    if (this.itemFist) {
+      const geometries = new Set<THREE.BufferGeometry>();
+      this.itemFist.traverse((object) => {
+        if (object instanceof THREE.Mesh) geometries.add(object.geometry);
+      });
+      for (const geometry of geometries) geometry.dispose();
+      this.itemFist = null;
     }
+    if (this.itemGeometryOwned && this.itemMesh) this.itemMesh.geometry.dispose();
+    this.itemRoot = null;
+    this.itemMesh = null;
+    this.itemGeometryOwned = false;
+  }
+
+  private rebuildItem(): void {
+    this.clearItem();
     this.currentItemKind = 'none';
+    this.currentCategory = null;
     const itemId = this.currentItemId;
     if (!itemId) {
       this.arm.visible = true;
@@ -388,28 +428,63 @@ export class FirstPersonHand {
     }
     this.arm.visible = false;
     const item = getItem(itemId) ?? null;
+    const category = heldCategory(itemId);
+
+    let geometry: THREE.BufferGeometry | null = null;
+    let material: THREE.Material = this.fallbackMaterial;
+    let scale = 1;
+    let grip: Vec3Tuple = [0, 0, 0];
+    let kind: HandItemKind = 'fallback';
+    let owned = true;
+
     if (item?.block) {
       const block = getBlockDef(blockNumeric(item.block));
-      const { geometry } = buildBlockGeometry(block, (tile) => this.atlas.layerOf(tile), tintForBlock(block));
-      this.itemMesh = new THREE.Mesh(geometry, this.blockMaterial);
-      this.itemMesh.scale.setScalar(HAND_SCALES.block);
-      this.currentItemKind = 'block';
+      geometry = buildBlockGeometry(block, (tile) => this.atlas.layerOf(tile), tintForBlock(block)).geometry;
+      material = this.blockMaterial;
+      scale = HAND_SCALES.block;
+      grip = [0.24, -0.28, 0.18];
+      kind = 'block';
     } else if (this.spriteMaterial && this.itemLayerOf) {
-      const geometry = buildSpriteGeometry(this.itemLayerOf(itemId));
-      this.itemMesh = new THREE.Mesh(geometry, this.spriteMaterial);
-      this.itemMesh.scale.setScalar(HAND_SCALES.sprite);
-      this.currentItemKind = 'sprite';
-    } else {
+      const extruded = this.itemCache.get(itemId, this.itemLayerOf(itemId));
+      if (extruded) {
+        geometry = extruded.geometry;
+        grip = extruded.grip;
+        scale = HAND_SCALES.sprite;
+        material = this.spriteMaterial;
+        kind = 'sprite';
+        owned = false;
+      }
+    }
+
+    if (!geometry) {
       this.fallbackMaterial.color.setHex(fallbackItemColor(item));
-      const geometry = new THREE.PlaneGeometry(0.21, 0.28);
-      this.itemMesh = new THREE.Mesh(geometry, this.fallbackMaterial);
-      this.currentItemKind = 'fallback';
+      geometry = new THREE.PlaneGeometry(0.21, 0.28);
+      material = this.fallbackMaterial;
+      kind = 'fallback';
+      grip = [0, 0, 0];
+      owned = true;
     }
-    if (this.itemMesh) {
-      this.itemMesh.position.set(0, 0, 0);
-      this.itemMesh.rotation.set(0, 0, 0);
-      this.handRoot.add(this.itemMesh);
-    }
+
+    this.itemGeometryOwned = owned;
+    const root = new THREE.Group();
+    root.rotation.set(...HELD_ITEM_ROTATIONS[category]);
+    const itemMesh = new THREE.Mesh(geometry, material);
+    itemMesh.scale.setScalar(scale);
+    itemMesh.position.set(-grip[0] * scale, -grip[1] * scale, -grip[2] * scale);
+    root.add(itemMesh);
+
+    // A visible fist around the grip point sells the 3D hold.
+    const fist = createHeldFist(this.armModel.materials.arm, category === 'block' ? 0.78 : 0.62);
+    fist.position.set(0, -0.015, 0.03);
+    fist.rotation.set(0.22, -0.3, 0.16);
+    root.add(fist);
+
+    this.handRoot.add(root);
+    this.itemRoot = root;
+    this.itemMesh = itemMesh;
+    this.itemFist = fist;
+    this.currentItemKind = kind;
+    this.currentCategory = category;
   }
 
   /** Start a swing animation. */
@@ -429,6 +504,7 @@ export class FirstPersonHand {
     this.light = Math.max(0.38, Math.min(1.2, daylight));
     this.blockMaterial.uniforms.uLight.value = this.light;
     if (this.spriteMaterial) this.spriteMaterial.uniforms.uLight.value = this.light;
+    this.armModel.materials.setLight(this.light);
   }
 
   get heldItemId(): string | null {
@@ -459,11 +535,7 @@ export class FirstPersonHand {
     const equip = 1 - Math.pow(1 - this.equipProgress, 3);
     const eat = this.eatTime < 1 ? Math.sin(this.eatTime * Math.PI) : 0;
     const hasItem = this.currentItemKind !== 'none';
-    const pose = this.currentItemKind === 'none'
-      ? HAND_POSES.arm
-      : this.currentItemKind === 'block'
-        ? HAND_POSES.block
-        : HAND_POSES.sprite;
+    const pose = hasItem ? HELD_POSES[this.currentCategory ?? 'other'] : HAND_POSES.arm;
 
     let x = pose.position[0];
     let y = pose.position[1];
@@ -521,6 +593,29 @@ export class FirstPersonHand {
     this.handRoot.rotation.set(rx, ry, rz);
     this.handRoot.visible = equip > 0.01;
     this.arm.visible = !hasItem;
+
+    // Swing the model around its grip point, not the camera origin. This keeps
+    // the tool head visible instead of sweeping the whole card across the screen.
+    if (this.itemRoot && this.currentCategory) {
+      const base = HELD_ITEM_ROTATIONS[this.currentCategory];
+      let ix = base[0];
+      let iy = base[1];
+      let iz = base[2];
+      if (this.currentCategory === 'weapon') {
+        ix -= swing * 0.8;
+        iz += swing * 0.55;
+      } else if (this.currentCategory === 'tool') {
+        ix -= swing * 0.95;
+        iy += swing * 0.18;
+      } else if (this.currentCategory === 'block') {
+        ix -= swing * 0.35;
+        iz += swing * 0.12;
+      } else {
+        ix -= swing * 0.5;
+        iz += swing * 0.2;
+      }
+      this.itemRoot.rotation.set(ix, iy, iz);
+    }
   }
 
   /**
@@ -540,18 +635,9 @@ export class FirstPersonHand {
   }
 
   dispose(): void {
-    if (this.itemMesh) {
-      this.handRoot.remove(this.itemMesh);
-      this.itemMesh.geometry.dispose();
-      this.itemMesh = null;
-    }
-    this.arm.traverse((object) => {
-      if (object instanceof THREE.Mesh) {
-        object.geometry.dispose();
-        const materials = Array.isArray(object.material) ? object.material : [object.material];
-        materials.forEach((material) => material.dispose());
-      }
-    });
+    this.clearItem();
+    this.armModel.dispose();
+    this.itemCache.dispose();
     this.blockMaterial.dispose();
     this.spriteMaterial?.dispose();
     this.fallbackMaterial.dispose();

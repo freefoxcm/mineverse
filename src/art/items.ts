@@ -63,70 +63,106 @@ function toolIcon(matKey: string, kind: ToolKind): ItemPainter {
     clear(p);
     const handle = new IconShape();
     if (kind === 'sword') {
-      handle.thickLine(9, 26, 13, 21, 3);
+      handle.thickLine(8, 27, 13, 22, 3);
     } else if (kind === 'pickaxe') {
-      // shorter handle: the head meets it at the middle of the arc
-      handle.thickLine(10, 27, 19, 16, 3);
+      // handle reaches into the socket so the extrusion is one watertight piece
+      handle.thickLine(9, 28, 19, 11, 3);
+    } else if (kind === 'axe') {
+      handle.thickLine(9, 28, 19, 13, 3);
     } else {
       handle.thickLine(9, 28, 19, 15, 3);
     }
     const head = new IconShape();
     if (kind === 'pickaxe') {
-      // flat pick head: ~110 degree arc with pointed tips, socket at the middle
-      for (let i = 0; i <= 20; i++) {
-        const angle = Math.PI * (1.19 + (0.62 * i) / 20);
-        head.circle(20 + Math.cos(angle) * 8.6, 15 + Math.sin(angle) * 8.6, 1.7);
+      // Horizontal T-shaped pick head: 6 px thick in the middle tapering to 2 px
+      // pointed tips, flat arc (centre only ~3 px above the tips), plus a wide
+      // central socket bar so it reads as a pick - never a thin crescent.
+      for (let x = 8; x <= 30; x++) {
+        const t = (x - 19) / 11;
+        const yTop = 6 + Math.round(3 * t * t);
+        const thickness = Math.max(2, Math.round(6 - 4.2 * Math.abs(t)));
+        for (let y = yTop; y < yTop + thickness; y++) head.set(x, y);
       }
-      head.thickLine(13, 9, 11, 13, 2);
-      head.thickLine(27, 9, 29, 13, 2);
-      head.circle(20, 13.5, 2.2);
+      // thick central bar where the handle enters (the T junction)
+      head.rect(15, 8, 10, 5);
     } else if (kind === 'axe') {
-      // broad hatchet blade with a curved cutting edge on the right
+      // axe head: broad blade, straight cutting edge on the right, socket at the
+      // handle. Deliberately asymmetric so it never reads as a shovel/mallet.
       head.polygon([
-        [15, 4],
-        [21, 3],
-        [27, 7],
-        [28, 12],
-        [24, 16],
-        [18, 15],
-        [14, 10],
+        [17, 4],
+        [23, 4],
+        [27, 6],
+        [29, 9],
+        [29, 14],
+        [25, 17],
+        [19, 16],
+        [15, 12],
+        [15, 7],
       ]);
-      head.circle(18, 11, 2.5);
+      head.circle(17, 11, 2.2);
     } else if (kind === 'shovel') {
-      // spade: wide rounded blade tapering into the handle socket
-      for (let y = 4; y <= 15; y++) {
-        const t = (y - 4) / 11;
-        const half = Math.round(3 + Math.sin(t * Math.PI * 0.85) * 2.2 - t * 1.6);
-        head.rect(20 - half, y, half * 2 + 1, 1);
-      }
-      head.rect(19, 15, 3, 3);
+      // wide flat spade blade with a tapered bottom and a socket neck
+      head.polygon([
+        [16, 4],
+        [24, 4],
+        [25, 6],
+        [25, 11],
+        [23, 14],
+        [20, 15],
+        [17, 14],
+        [15, 11],
+        [15, 6],
+      ]);
+      head.rect(19, 14, 3, 3);
     } else {
-      // sword blade + crossguard
-      head.thickLine(15, 20, 25, 9, 3);
-      head.thickLine(25, 9, 27, 7, 2);
-      head.set(26, 7);
-      head.set(27, 6);
+      // sword blade: wider near the guard, tapering to a sharp point
+      head.thickLine(15, 22, 26, 8, 5);
+      head.thickLine(26, 8, 28, 6, 2);
+      head.set(29, 5);
     }
     if (kind === 'sword') {
       const guard = new IconShape();
-      guard.thickLine(11, 19, 17, 24, 2);
+      guard.thickLine(9, 18, 18, 27, 3);
       paintIconShape(p, head, palette.base, palette);
-      paintIconShape(p, guard, palette.base, palette);
       rimLight(p, head, 'left', palette.light);
+      paintIconShape(p, guard, palette.base, palette);
       paintIconShape(p, handle, WOODEN_HANDLE.base, WOODEN_HANDLE);
+      const pommel = new IconShape();
+      pommel.circle(7.5, 27.5, 2);
+      paintIconShape(p, pommel, palette.dark, palette);
+      // clearer grip wrap
       p.set(9, 26, WOODEN_HANDLE.dark);
+      p.set(10, 25, WOODEN_HANDLE.dark);
+      p.set(11, 24, WOODEN_HANDLE.dark);
+      p.set(12, 23, WOODEN_HANDLE.dark);
+      p.set(10, 26, WOODEN_HANDLE.light);
+      p.set(11, 25, WOODEN_HANDLE.light);
     } else {
       paintIconShape(p, handle, WOODEN_HANDLE.base, WOODEN_HANDLE);
       paintIconShape(p, head, palette.base, palette);
-      if (kind === 'axe') rimLight(p, head, 'right', palette.light);
       if (kind === 'pickaxe') {
         rimLight(p, head, 'top', palette.light);
-        // dark socket pixel where the handle enters the head
-        p.set(20, 14, palette.dark);
+        // central socket plate: lit top edge, dark bottom edge, socket + rivet
+        p.rect(15, 8, 10, 1, palette.light);
+        p.rect(15, 12, 10, 1, palette.dark);
+        p.rect(17, 10, 4, 2, palette.dark);
+        p.set(18, 10, palette.light);
+        p.rect(10, 7, 2, 1, palette.light);
+        p.rect(26, 7, 2, 1, palette.light);
+      }
+      if (kind === 'axe') {
+        rimLight(p, head, 'right', palette.light);
+        // dark socket eye where the handle enters the head
+        p.rect(18, 14, 4, 3, palette.dark);
+        p.set(19, 14, palette.light);
+        p.set(16, 10, palette.dark);
+        p.set(16, 11, palette.dark);
       }
       if (kind === 'shovel') {
-        p.set(20, 6, palette.light);
-        p.set(19, 7, palette.light);
+        p.rect(16, 4, 8, 1, palette.light);
+        p.set(20, 13, palette.dark);
+        p.set(19, 13, palette.dark);
+        p.rect(19, 15, 3, 1, palette.dark);
       }
     }
   };

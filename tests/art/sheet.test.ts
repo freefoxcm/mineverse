@@ -3,7 +3,8 @@ import path from 'node:path';
 import { describe, it } from 'vitest';
 import { ITEM_ICON_NAMES, ITEM_ICONS } from '../../src/art/items';
 import { MOB_SKIN_NAMES, MOB_SKINS } from '../../src/art/mobSkins';
-import { PixelPainter } from '../../src/art/pixels';
+import { PixelPainter, type PixelBuffer } from '../../src/art/pixels';
+import { createPlayerArmSkin, createPlayerSleeveSkin } from '../../src/art/playerSkin';
 import { UI_ICON_NAMES, UI_ICONS, createLogo } from '../../src/art/ui';
 import { TILES } from '../../src/art/tiles';
 import { TILE_SIZE, type TilePainter } from '../../src/art/types';
@@ -28,6 +29,19 @@ function paintCell(painter: TilePainter): PixelPainter {
   p.fill('rgba(0,0,0,0)');
   painter(p);
   return p;
+}
+
+/** Adapts a raw PixelBuffer (e.g. a skin texture) to the TilePainter sheet API. */
+function bufferPainter(buffer: PixelBuffer): TilePainter {
+  return (p) => {
+    p.fill('rgba(0,0,0,0)');
+    for (let y = 0; y < buffer.height; y++) {
+      for (let x = 0; x < buffer.width; x++) {
+        const i = (y * buffer.width + x) * 4;
+        p.set(x, y, [buffer.data[i], buffer.data[i + 1], buffer.data[i + 2], buffer.data[i + 3]]);
+      }
+    }
+  };
 }
 
 /** Alpha-composite a pixel over the opaque background. */
@@ -295,6 +309,27 @@ describe('art contact sheets', () => {
     });
     fs.mkdirSync(path.join(process.cwd(), 'artifacts'), { recursive: true });
     fs.writeFileSync(path.join(process.cwd(), 'artifacts', 'art-tiling.png'), encodePng(width, height, canvas));
+  });
+
+  it('writes artifacts/art-tools.png (V4 extruded-tool silhouettes)', () => {
+    const materials = ['wooden', 'stone', 'iron', 'golden', 'diamond'];
+    const kinds = ['pickaxe', 'axe', 'shovel', 'sword'];
+    const cells: Cell[] = [];
+    for (const kind of kinds) {
+      for (const material of materials) {
+        const id = `${material}_${kind}`;
+        cells.push({ label: id, painter: ITEM_ICONS[id] });
+      }
+    }
+    writeSheet('art-tools.png', cells, 5, 8);
+  });
+
+  it('writes artifacts/art-player-skins.png (first-person arm + sleeve)', () => {
+    const cells: Cell[] = [
+      { label: 'player_arm', painter: bufferPainter(createPlayerArmSkin()) },
+      { label: 'player_sleeve', painter: bufferPainter(createPlayerSleeveSkin()) },
+    ];
+    writeSheet('art-player-skins.png', cells, 2, 8);
   });
 
   it('writes artifacts/art-logo.png', () => {

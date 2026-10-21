@@ -128,6 +128,162 @@ describe('item icons: tool / armour tiers are distinct', () => {
   });
 });
 
+describe('item icons: tool silhouettes (V4 extrusion-ready)', () => {
+  const MATERIAL_KEYS = ['wooden', 'stone', 'iron', 'golden', 'diamond'];
+  const TOOL_KINDS = ['pickaxe', 'axe', 'shovel', 'sword'];
+  const TOOL_IDS = MATERIAL_KEYS.flatMap((m) => TOOL_KINDS.map((k) => `${m}_${k}`));
+
+  function maskOf(id: string): Uint8Array {
+    const p = paint(ITEM_ICONS[id]);
+    const mask = new Uint8Array(TILE_SIZE * TILE_SIZE);
+    for (let i = 0; i < mask.length; i++) mask[i] = p.data[i * 4 + 3] > 0 ? 1 : 0;
+    return mask;
+  }
+
+  function floodFillOpaque(mask: Uint8Array, start: number): number {
+    const seen = new Uint8Array(mask.length);
+    const stack = [start];
+    let count = 0;
+    while (stack.length > 0) {
+      const index = stack.pop() as number;
+      if (seen[index] || mask[index] === 0) continue;
+      seen[index] = 1;
+      count++;
+      const x = index % TILE_SIZE;
+      const y = Math.floor(index / TILE_SIZE);
+      if (x > 0) stack.push(index - 1);
+      if (x < TILE_SIZE - 1) stack.push(index + 1);
+      if (y > 0) stack.push(index - TILE_SIZE);
+      if (y < TILE_SIZE - 1) stack.push(index + TILE_SIZE);
+    }
+    return count;
+  }
+
+  it('uses binary alpha for all tool icons', () => {
+    for (const id of TOOL_IDS) {
+      const p = paint(ITEM_ICONS[id]);
+      for (let i = 3; i < p.data.length; i += 4) {
+        expect([0, 255].includes(p.data[i]), `${id} alpha ${p.data[i]}`).toBe(true);
+      }
+    }
+  });
+
+  it('is one 4-connected silhouette with no floating pixels', () => {
+    for (const id of TOOL_IDS) {
+      const mask = maskOf(id);
+      let opaque = 0;
+      let first = -1;
+      for (let i = 0; i < mask.length; i++) {
+        if (mask[i] === 0) continue;
+        opaque++;
+        if (first < 0) first = i;
+      }
+      expect(opaque, id).toBeGreaterThan(140);
+      expect(floodFillOpaque(mask, first), `${id} disconnected pixels`).toBe(opaque);
+    }
+  });
+
+  it('has no enclosed transparent holes so the extruded sides stay solid', () => {
+    for (const id of TOOL_IDS) {
+      const mask = maskOf(id);
+      const reachable = new Uint8Array(mask.length);
+      const stack: number[] = [];
+      for (let x = 0; x < TILE_SIZE; x++) {
+        stack.push(x, (TILE_SIZE - 1) * TILE_SIZE + x);
+      }
+      for (let y = 0; y < TILE_SIZE; y++) {
+        stack.push(y * TILE_SIZE, y * TILE_SIZE + TILE_SIZE - 1);
+      }
+      while (stack.length > 0) {
+        const index = stack.pop() as number;
+        if (reachable[index] || mask[index] === 1) continue;
+        reachable[index] = 1;
+        const x = index % TILE_SIZE;
+        const y = Math.floor(index / TILE_SIZE);
+        if (x > 0) stack.push(index - 1);
+        if (x < TILE_SIZE - 1) stack.push(index + 1);
+        if (y > 0) stack.push(index - TILE_SIZE);
+        if (y < TILE_SIZE - 1) stack.push(index + TILE_SIZE);
+      }
+      let holes = 0;
+      for (let i = 0; i < mask.length; i++) if (mask[i] === 0 && reachable[i] === 0) holes++;
+      expect(holes, `${id} enclosed transparent holes`).toBe(0);
+    }
+  });
+
+  it('pickaxe head is wide and flat instead of a sickle crescent', () => {
+    for (const id of TOOL_IDS.filter((tool) => tool.endsWith('_pickaxe'))) {
+      const p = paint(ITEM_ICONS[id]);
+      let minX = TILE_SIZE;
+      let maxX = -1;
+      let minY = TILE_SIZE;
+      const topByColumn: number[] = new Array(TILE_SIZE).fill(TILE_SIZE);
+      for (let y = 0; y < TILE_SIZE; y++) {
+        for (let x = 0; x < TILE_SIZE; x++) {
+          if (p.get(x, y)[3] === 0) continue;
+          minX = Math.min(minX, x);
+          maxX = Math.max(maxX, x);
+          minY = Math.min(minY, y);
+          topByColumn[x] = Math.min(topByColumn[x], y);
+        }
+      }
+      expect(maxX - minX + 1, `${id} width`).toBeGreaterThanOrEqual(20);
+      const centreX = Math.round((minX + maxX) / 2);
+      const centreTop = topByColumn[centreX];
+      const edgeTop = Math.max(topByColumn[minX + 3], topByColumn[maxX - 3]);
+      // the arc rises towards the middle (>=2 px) but stays shallow (<=6 px)
+      expect(centreTop, `${id} flat arc`).toBeLessThanOrEqual(minY + 6);
+      expect(edgeTop - centreTop, `${id} shallow arc`).toBeGreaterThanOrEqual(2);
+      expect(edgeTop - centreTop, `${id} shallow arc`).toBeLessThanOrEqual(6);
+      // widest head row is wide enough to read as a pick, not a hook
+      let widestTopRow = 0;
+      for (let y = minY; y < minY + 6; y++) {
+        let width = 0;
+        for (let x = 0; x < TILE_SIZE; x++) if (p.get(x, y)[3] > 0) width++;
+        widestTopRow = Math.max(widestTopRow, width);
+      }
+      expect(widestTopRow, `${id} head width`).toBeGreaterThanOrEqual(16);
+      // T-bar must be thick enough to survive a 2-3 px extrusion side; the tips
+      // stay thin so the silhouette reads as a pick with two points.
+      const columnThickness = (x: number): number => {
+        let run = 0;
+        for (let y = minY; y < minY + 10; y++) if (p.get(x, y)[3] > 0) run++;
+        return run;
+      };
+      expect(columnThickness(centreX), `${id} head thickness`).toBeGreaterThanOrEqual(5);
+      const tipThickness = Math.max(columnThickness(minX + 1), columnThickness(maxX - 1));
+      expect(tipThickness, `${id} thin tips`).toBeGreaterThanOrEqual(2);
+      expect(tipThickness, `${id} thin tips`).toBeLessThanOrEqual(6);
+      // the T-bar centre is clearly thicker than the pointed ends
+      expect(columnThickness(centreX) - tipThickness, `${id} T-bar`).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it('axe, shovel and sword keep clear distinctive silhouettes', () => {
+    for (const id of TOOL_IDS) {
+      const p = paint(ITEM_ICONS[id]);
+      const opaqueIn = (x0: number, y0: number, x1: number, y1: number): number => {
+        let count = 0;
+        for (let y = y0; y <= y1; y++) {
+          for (let x = x0; x <= x1; x++) if (p.get(x, y)[3] > 0) count++;
+        }
+        return count;
+      };
+      if (id.endsWith('_axe')) {
+        // tall cuttine edge on the right
+        expect(opaqueIn(22, 4, 31, 16), `${id} cutting edge`).toBeGreaterThanOrEqual(10);
+      } else if (id.endsWith('_shovel')) {
+        // wide spade blade, narrow neck
+        expect(opaqueIn(13, 4, 26, 8), `${id} wide blade`).toBeGreaterThanOrEqual(14);
+      } else if (id.endsWith('_sword')) {
+        // long blade to the top-right, guard and pommel at the lower-left
+        expect(opaqueIn(22, 3, 31, 14), `${id} blade tip`).toBeGreaterThanOrEqual(8);
+        expect(opaqueIn(6, 16, 21, 29), `${id} guard/grip`).toBeGreaterThanOrEqual(14);
+      }
+    }
+  });
+});
+
 describe('item icons: helpers', () => {
   it('paintItemIcon reports unknown ids and clears the buffer', () => {
     const p = new PixelPainter(TILE_SIZE, TILE_SIZE);

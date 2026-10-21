@@ -14,10 +14,12 @@
 | | |
 |---|---|
 | ![高空景观](docs/screenshots/hero-aerial.png) | ![日落](docs/screenshots/sunset.png) |
-| ![空手手臂](docs/screenshots/hand.png) | ![夜晚生物](docs/screenshots/night-mobs.png) |
-| ![洞穴与火把](docs/screenshots/cave.png) | ![第三人称](docs/screenshots/third-person.png) |
-| ![水下](docs/screenshots/underwater.png) | ![背包与合成](docs/screenshots/inventory.png) |
-| ![创造物品栏](docs/screenshots/creative.png) | ![标题界面](docs/screenshots/title.png) |
+| ![空手手臂](docs/screenshots/hand.png) | ![手持镐](docs/screenshots/held-pickaxe.png) |
+| ![手持方块](docs/screenshots/held-block.png) | ![手持剑](docs/screenshots/held-sword.png) |
+| ![夜晚生物](docs/screenshots/night-mobs.png) | ![洞穴与火把](docs/screenshots/cave.png) |
+| ![第三人称](docs/screenshots/third-person.png) | ![水下](docs/screenshots/underwater.png) |
+| ![背包与合成](docs/screenshots/inventory.png) | ![创造物品栏](docs/screenshots/creative.png) |
+| ![标题界面](docs/screenshots/title.png) | ![森林景观](docs/screenshots/hero.png) |
 
 ## 特性
 
@@ -32,7 +34,8 @@
 
 ### 玩法
 - 新世界初始补给：石镐/石斧/石剑、16 火把、32 木板、32 圆石、工作台、8 苹果（创造模式改为 9 组建筑方块）；URL 加 `?kit=0` 可关闭。
-- 空手：与原版一致，第一人称始终显示玩家的皮肤手臂（待机微动/挥拳/行走摆动），可徒手挖掘与攻击；截图模式可临时隐藏。
+- 空手：与原版一致，第一人称始终显示玩家的皮肤手臂（纹理前臂 + 拳头/指节 + 袖口；待机微动/挥拳/行走摆动），可徒手挖掘与攻击；截图模式可临时隐藏。
+- **第一人称 3D 手持物**：工具/武器/食物按 32×32 图标 alpha 轮廓挤出真实厚度（正面/背面/侧面），方块有六面明暗，物品以斜 3/4 姿态 + 握持拳头呈现；挥动绕握点旋转，不再是平面贴片。
 - 生存：生命/饥饿/饱和度/护甲/氧气、摔落/溺水/岩浆/生物伤害、死亡掉落与重生、工具耐久、熔炉、箱子、工作台。
 - 合成：81 条配方（2×2 背包 / 3×3 工作台、有序/无序、自动偏移、不镜像）+ 14 条熔炼配方与燃料表。
 - 创造模式：飞行、无限方块、即时破坏、创造物品栏（分类 + 搜索）。
