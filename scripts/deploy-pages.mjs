@@ -120,12 +120,27 @@ function ensureRepository() {
 }
 
 function publishGhPages(dist) {
-  log('preparing orphan gh-pages branch');
+  log('preparing gh-pages worktree');
+  tryRun('git', ['worktree', 'remove', '--force', WORKTREE], { allowFailure: true });
   removeDir(WORKTREE);
   git(['worktree', 'prune']);
-  git(['worktree', 'add', '--detach', WORKTREE]);
+
+  const localBranches = git(['branch', '--list'], { capture: true });
+  const remoteBranches = git(['branch', '-r', '--list'], { capture: true });
+  const hasLocal = localBranches.split(/\r?\n/).some((line) => line.trim() === 'gh-pages');
+  const hasRemote = remoteBranches.split(/\r?\n/).some((line) => line.trim() === 'origin/gh-pages');
+  if (hasLocal) {
+    log('reusing local gh-pages branch');
+    git(['worktree', 'add', '--force', WORKTREE, 'gh-pages']);
+  } else if (hasRemote) {
+    log('reusing remote gh-pages branch');
+    git(['worktree', 'add', '--force', '-B', 'gh-pages', WORKTREE, 'origin/gh-pages']);
+  } else {
+    log('creating orphan gh-pages branch');
+    git(['worktree', 'add', '--detach', WORKTREE]);
+    git(['-C', WORKTREE, 'checkout', '--orphan', 'gh-pages']);
+  }
   const worktreeGit = (args, options = {}) => git(['-C', WORKTREE, ...args], options);
-  worktreeGit(['checkout', '--orphan', 'gh-pages']);
   tryRun('git', ['-C', WORKTREE, 'rm', '-rf', '--ignore-unmatch', '.'], { allowFailure: true });
   for (const entry of fs.readdirSync(WORKTREE)) {
     if (entry === '.git') continue;
