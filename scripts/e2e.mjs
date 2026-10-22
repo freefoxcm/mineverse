@@ -258,6 +258,38 @@ async function main() {
     check('block broke', interaction.after !== interaction.stoneId, `after=${interaction.after} aim=${JSON.stringify(interaction.aim)} during=${JSON.stringify(interaction.during)}`);
     await shot('12-break-block');
 
+    // Regression: mining a normal ground block (looking down), not a placed wall.
+    const groundBreak = await evaluate(async () => {
+      const mc = window.__MC__;
+      const player = mc.player;
+      const p = player.position;
+      const yaw = player.yaw;
+      const dirX = -Math.sin(yaw);
+      const dirZ = -Math.cos(yaw);
+      const bx = Math.floor(p.x + dirX * 2);
+      const bz = Math.floor(p.z + dirZ * 2);
+      let by = Math.floor(p.y + 2);
+      while (by > 0 && mc.getBlock(bx, by, bz) === 0) by--;
+      const before = mc.getBlock(bx, by, bz);
+      const eyeY = p.y + 1.62;
+      const dx = bx + 0.5 - p.x;
+      const dy = by + 0.5 - eyeY;
+      const dz = bz + 0.5 - p.z;
+      mc.selectSlot(0);
+      mc.look(Math.atan2(-dx, -dz), Math.atan2(dy, Math.hypot(dx, dz)));
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      const aimed = mc.getInteraction();
+      mc.setAttack(true);
+      await new Promise((resolve) => setTimeout(resolve, 1800));
+      mc.setAttack(false);
+      return { before, after: mc.getBlock(bx, by, bz), target: { x: bx, y: by, z: bz }, aimed };
+    });
+    check(
+      'ground block broke',
+      groundBreak.before !== 0 && groundBreak.after !== groundBreak.before,
+      JSON.stringify(groundBreak),
+    );
+
     // Third-person player model (F5).
     await evaluate(() => {
       window.__MC__.setThirdPerson(true);

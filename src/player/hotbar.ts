@@ -52,7 +52,7 @@ export const SURVIVAL_STARTER_KIT: ReadonlyArray<readonly [string, number]> = [
   ['cobblestone', 32],
   ['crafting_table', 1],
   ['apple', 8],
-  ['furnace', 1],
+  ['stone_shovel', 1],
 ];
 
 export const CREATIVE_STARTER_KIT: ReadonlyArray<readonly [string, number]> = [

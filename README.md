@@ -16,6 +16,7 @@
 | ![高空景观](docs/screenshots/hero-aerial.png) | ![日落](docs/screenshots/sunset.png) |
 | ![手持镐](docs/screenshots/held-pickaxe.png) | ![手持方块](docs/screenshots/held-block.png) |
 | ![手持剑](docs/screenshots/held-sword.png) | ![手持苹果](docs/screenshots/held-apple.png) |
+| ![手持斧](docs/screenshots/held-axe.png) | ![手持锹](docs/screenshots/held-shovel.png) |
 | ![牛/羊/猪/鸡](docs/screenshots/mobs.png) | ![夜晚生物](docs/screenshots/night-mobs.png) |
 | ![洞穴与火把](docs/screenshots/cave.png) | ![第三人称](docs/screenshots/third-person.png) |
 | ![水下](docs/screenshots/underwater.png) | ![背包与合成](docs/screenshots/inventory.png) |
@@ -33,7 +34,7 @@
 - WebGL2 纹理数组（逐 tile 分层，无图集接缝）、42 种 WebAudio 程序化音效、程序化像素美术（89 方块纹理 / 75 物品图标 / 26 UI 贴图 / 29 生物皮肤）。
 
 ### 玩法
-- 新世界初始补给：9 格全满 —— 石镐/石斧/石剑、16 火把、32 木板、32 圆石、工作台、8 苹果、熔炉（创造模式改为 9 组建筑方块）；URL 加 `?kit=0` 可关闭。
+- 新世界初始补给：9 格全满 —— 石镐/石斧/石锹/石剑、16 火把、32 木板、32 圆石、工作台、8 苹果（创造模式改为 9 组建筑方块）；URL 加 `?kit=0` 可关闭。
 - **移除空手状态**：第一人称不再渲染空手/手臂模型；数字键/滚轮/使用耗尽后会**自动跳过空槽**选择有物品的槽位。只有 9 格全部为空时才无物品显示（仍可徒手挖掘/攻击）。
 - **第一人称 3D 手持物**：镐/斧/锹/剑使用真正的实体模型（木质柄、镐头/斧刃/铲头、剑刃/护手/柄），带逐面明暗与木/石/铁/金/钻石材质配色；食物/材料仍用 32×32 图标挤出模型，方块为六面明暗立方体。统一采用右下角 3/4 斜握，不露出手。
 - 生存：生命/饥饿/饱和度/护甲/氧气、摔落/溺水/岩浆/生物伤害、死亡掉落与重生、工具耐久、熔炉、箱子、工作台。

@@ -254,6 +254,8 @@ function stopProcess(child) {
     // Held-item 3D views: starter kit slots 0..8 are all occupied.
     for (const [slot, name] of [
       [0, 'held-pickaxe'],
+      [1, 'held-axe'],
+      [8, 'held-shovel'],
       [2, 'held-sword'],
       [4, 'held-block'],
       [7, 'held-apple'],

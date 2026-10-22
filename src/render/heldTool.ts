@@ -266,21 +266,24 @@ export function buildHeldToolModel(itemId: string): HeldToolModel | null {
     addPrism(
       buffers,
       [
-        [-0.17, 0.5],
-        [0.17, 0.5],
-        [0.21, 0.62],
-        [0.21, 0.77],
-        [0.16, 0.89],
-        [0, 0.94],
-        [-0.16, 0.89],
-        [-0.21, 0.77],
-        [-0.21, 0.62],
+        // Shovel-style spade: wide straight cutting edge at the top, tapering
+        // down into the socket/neck instead of a pointed spearhead.
+        [-0.17, 0.91],
+        [0.17, 0.91],
+        [0.21, 0.84],
+        [0.21, 0.66],
+        [0.14, 0.55],
+        [0.08, 0.5],
+        [-0.08, 0.5],
+        [-0.14, 0.55],
+        [-0.21, 0.66],
+        [-0.21, 0.84],
       ],
       0.05,
       palette.base,
     );
-    addBox(buffers, [0, 0.92, 0], [0.16, 0.035, 0.035], palette.light);
-    addBox(buffers, [0, 0.55, 0], [0.1, 0.08, 0.07], palette.dark);
+    addBox(buffers, [0, 0.915, 0], [0.34, 0.035, 0.035], palette.light);
+    addBox(buffers, [0, 0.54, 0], [0.1, 0.08, 0.07], palette.dark);
   }
 
   return makeGeometry(buffers, 0.38);
