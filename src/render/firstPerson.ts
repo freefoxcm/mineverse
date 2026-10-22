@@ -85,8 +85,8 @@ export const HAND_POSES: Readonly<Record<'block' | 'sprite' | 'arm', HandPose>> 
 /** Held-item hand pose per item category (no arm/hand is rendered). */
 export const HELD_POSES: Readonly<Record<HeldCategory, HandPose>> = {
   block: {
-    position: [0.66, -0.47, -0.72],
-    rotation: [0.18, -0.6, 0.06],
+    position: [0.62, -0.44, -0.68],
+    rotation: [0.2, -0.62, 0.06],
   },
   tool: {
     position: [0.64, -0.46, -0.7],
@@ -122,7 +122,7 @@ const HELD_ITEM_ROTATIONS: Readonly<Record<HeldCategory, Vec3Tuple>> = {
 
 /** Held-item world scale: block ≈25% screen height, sprite icons ≈23%. */
 export const HAND_SCALES: Readonly<Record<'block' | 'sprite' | 'fallback', number>> = {
-  block: 0.18,
+  block: 0.24,
   sprite: 0.24,
   fallback: 1,
 };

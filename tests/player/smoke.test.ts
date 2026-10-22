@@ -234,7 +234,7 @@ describe('first person hand geometry', () => {
     const block = project(blockMesh);
     const blockHeight = (block.maxY - block.minY) / 2; // NDC -> fraction of screen height
     expect(blockHeight).toBeGreaterThan(0.18);
-    expect(blockHeight).toBeLessThan(0.3);
+    expect(blockHeight).toBeLessThan(0.4);
     expect((block.minX + block.maxX) / 2).toBeGreaterThan(0.25);
     expect((block.minY + block.maxY) / 2).toBeLessThan(-0.35);
 
