@@ -21,7 +21,7 @@ describe('extruded held-item geometry', () => {
     expect(pickaxe!.triangles).toBeGreaterThan(30);
     const box = bounds(pickaxe!.geometry);
     // Front/back slab plus side walls: clearly thicker than a flat quad in z.
-    expect(box.max.z - box.min.z).toBeCloseTo(2 / 32, 5);
+    expect(box.max.z - box.min.z).toBeCloseTo(10 / 32, 5);
     expect(box.max.x - box.min.x).toBeGreaterThan(0.5);
     expect(box.max.y - box.min.y).toBeGreaterThan(0.5);
     pickaxe!.geometry.dispose();

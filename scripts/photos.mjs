@@ -108,10 +108,10 @@ function stopProcess(child) {
     await page.waitForFunction(() => window.__MC__ && window.__MC__.ready === true, null, { timeout: 90000 });
     await wait(900);
 
-    // Starter kit comes from a fresh world; keep slot 8 empty for the bare-hand shot.
+    // Starter kit fills all nine hotbar slots; no empty-hand state exists.
     await evaluate(() => {
       const mc = window.__MC__;
-      mc.selectSlot(8);
+      mc.selectSlot(0);
       mc.setTime(4000);
       mc.setBlockOutlineVisible(false);
       mc.setHandVisible(false);
@@ -251,21 +251,7 @@ function stopProcess(child) {
     }, scenic);
     await wait(900);
 
-    // Empty-hand first-person arm (the game always shows the player's arm like Minecraft).
-    await evaluate((pos) => {
-      const mc = window.__MC__;
-      document.querySelectorAll('.toast').forEach((element) => {
-        element.className = 'toast';
-      });
-      mc.setHandVisible(true);
-      mc.selectSlot(8); // starter kit leaves this slot empty
-      mc.look(pos.yaw, -0.12);
-    }, scenic);
-    await wait(600);
-    await shot('hand');
-
-    // Held-item 3D views: starter kit slots 0..7 (pickaxe/axe/sword/torch/
-    // planks/cobble/crafting table/apple), slot 8 is empty.
+    // Held-item 3D views: starter kit slots 0..8 are all occupied.
     for (const [slot, name] of [
       [0, 'held-pickaxe'],
       [2, 'held-sword'],
@@ -279,10 +265,6 @@ function stopProcess(child) {
       await wait(450);
       await shot(name);
     }
-    await evaluate(() => {
-      window.__MC__.setHandVisible(false);
-      window.__MC__.selectSlot(8);
-    });
     await evaluate(() => {
       window.__MC__.setHandVisible(false);
       window.__MC__.selectSlot(0);

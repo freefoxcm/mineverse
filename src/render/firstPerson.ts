@@ -28,7 +28,6 @@ import type { Slot } from '../core/types';
 import { blockNumeric, faceTexture, getBlockDef, type BlockDef } from '../world/blocks';
 import { getItem, type ItemDef } from '../world/items';
 import type { TextureAtlas } from './atlas';
-import { createArmModel, type ArmModel } from './armModel';
 import { HeldItemGeometryCache, heldCategory, type HeldCategory } from './heldItem';
 
 export type HandSwingKind = 'attack' | 'place';
@@ -82,47 +81,47 @@ export const HAND_POSES: Readonly<Record<'block' | 'sprite' | 'arm', HandPose>> 
   },
 };
 
-/** Held-item hand pose per item category (V4 3D rig). */
+/** Held-item hand pose per item category (no arm/hand is rendered). */
 export const HELD_POSES: Readonly<Record<HeldCategory, HandPose>> = {
   block: {
-    position: [0.54, -0.35, -0.82],
-    rotation: [0.18, -0.42, 0.05],
+    position: [0.66, -0.47, -0.72],
+    rotation: [0.18, -0.6, 0.06],
   },
   tool: {
-    position: [0.5, -0.34, -0.78],
-    rotation: [0.08, -0.34, 0.16],
+    position: [0.64, -0.46, -0.7],
+    rotation: [0.1, -0.42, 0.1],
   },
   weapon: {
-    position: [0.5, -0.34, -0.78],
-    rotation: [0.04, -0.3, 0.24],
+    position: [0.64, -0.46, -0.7],
+    rotation: [0.06, -0.4, 0.16],
   },
   food: {
-    position: [0.47, -0.36, -0.74],
-    rotation: [0.08, -0.26, 0.12],
+    position: [0.6, -0.48, -0.7],
+    rotation: [0.08, -0.36, 0.1],
   },
   material: {
-    position: [0.5, -0.34, -0.78],
-    rotation: [0.06, -0.32, 0.14],
+    position: [0.64, -0.46, -0.7],
+    rotation: [0.06, -0.4, 0.12],
   },
   other: {
-    position: [0.5, -0.34, -0.78],
-    rotation: [0.06, -0.32, 0.14],
+    position: [0.64, -0.46, -0.7],
+    rotation: [0.06, -0.4, 0.12],
   },
 };
 
-/** Initial tilt of the 3D item itself, so the extruded side is always visible. */
+/** Initial tilt of the 3D item itself, so the extruded side is clearly visible. */
 const HELD_ITEM_ROTATIONS: Readonly<Record<HeldCategory, Vec3Tuple>> = {
-  block: [-0.12, -0.62, 0.06],
-  tool: [-0.05, -0.3, -0.42],
-  weapon: [-0.05, -0.28, 0.02],
-  food: [-0.06, -0.34, 0.12],
-  material: [-0.04, -0.38, 0.12],
-  other: [-0.04, -0.38, 0.12],
+  block: [-0.16, -0.68, 0.06],
+  tool: [-0.08, -0.65, -0.36],
+  weapon: [-0.06, -0.58, -0.12],
+  food: [-0.08, -0.46, 0.12],
+  material: [-0.06, -0.5, 0.12],
+  other: [-0.06, -0.5, 0.12],
 };
 
 /** Held-item world scale: block ≈25% screen height, sprite icons ≈23%. */
 export const HAND_SCALES: Readonly<Record<'block' | 'sprite' | 'fallback', number>> = {
-  block: 0.16,
+  block: 0.18,
   sprite: 0.24,
   fallback: 1,
 };
@@ -348,8 +347,6 @@ export class FirstPersonHand {
   private readonly spriteMaterial: THREE.ShaderMaterial | null;
   private readonly fallbackMaterial: THREE.MeshBasicMaterial;
   private readonly handRoot = new THREE.Group();
-  private readonly arm: THREE.Group;
-  private readonly armModel: ArmModel;
   private readonly itemCache = new HeldItemGeometryCache();
   private itemRoot: THREE.Group | null = null;
   private itemMesh: THREE.Mesh | null = null;
@@ -380,12 +377,6 @@ export class FirstPersonHand {
     if (this.spriteMaterial && options.itemLayerOf) this.itemLayerOf = options.itemLayerOf;
     this.fallbackMaterial = new THREE.MeshBasicMaterial({ color: 0x9a9a9a });
 
-    // Empty-hand arm: tapered forearm, textured skin, sleeve/cuff and a fist.
-    this.armModel = createArmModel();
-    this.arm = this.armModel.group;
-    this.arm.scale.setScalar(1);
-    this.handRoot.add(this.arm);
-
     this.scene.add(this.handRoot);
     this.setItem(null);
   }
@@ -414,14 +405,8 @@ export class FirstPersonHand {
     this.currentCategory = null;
     const itemId = this.currentItemId;
     if (!itemId) {
-      this.armModel.setHolding(false);
-      this.arm.visible = true;
       return;
     }
-    this.armModel.setHolding(true);
-    // Vanilla hides the arm behind the item model in first person: only the
-    // item is visible at the bottom-right. (Empty hand still shows the arm.)
-    this.arm.visible = false;
     const item = getItem(itemId) ?? null;
     const category = heldCategory(itemId);
 
@@ -464,7 +449,7 @@ export class FirstPersonHand {
     const root = new THREE.Group();
     root.rotation.set(...HELD_ITEM_ROTATIONS[category]);
     const itemMesh = new THREE.Mesh(geometry, material);
-    const drawScale = kind === 'sprite' ? scale * 1.2 : scale;
+    const drawScale = kind === 'sprite' ? scale * 1.5 : scale;
     itemMesh.scale.setScalar(drawScale);
     itemMesh.position.set(-grip[0] * drawScale, -grip[1] * drawScale, -grip[2] * drawScale);
     root.add(itemMesh);
@@ -493,7 +478,6 @@ export class FirstPersonHand {
     this.light = Math.max(0.38, Math.min(1.2, daylight));
     this.blockMaterial.uniforms.uLight.value = this.light;
     if (this.spriteMaterial) this.spriteMaterial.uniforms.uLight.value = this.light;
-    this.armModel.materials.setLight(this.light);
   }
 
   get heldItemId(): string | null {
@@ -524,7 +508,7 @@ export class FirstPersonHand {
     const equip = 1 - Math.pow(1 - this.equipProgress, 3);
     const eat = this.eatTime < 1 ? Math.sin(this.eatTime * Math.PI) : 0;
     const hasItem = this.currentItemKind !== 'none';
-    const pose = hasItem ? HELD_POSES[this.currentCategory ?? 'other'] : HAND_POSES.arm;
+    const pose = hasItem ? HELD_POSES[this.currentCategory ?? 'other'] : { position: [0, 0, 0], rotation: [0, 0, 0] };
 
     let x = pose.position[0];
     let y = pose.position[1];
@@ -580,8 +564,7 @@ export class FirstPersonHand {
 
     this.handRoot.position.set(x, y, z);
     this.handRoot.rotation.set(rx, ry, rz);
-    this.handRoot.visible = equip > 0.01;
-    this.arm.visible = !hasItem;
+    this.handRoot.visible = hasItem && equip > 0.01;
 
     // Swing the model around its grip point, not the camera origin. This keeps
     // the tool head visible instead of sweeping the whole card across the screen.
@@ -625,7 +608,6 @@ export class FirstPersonHand {
 
   dispose(): void {
     this.clearItem();
-    this.armModel.dispose();
     this.itemCache.dispose();
     this.blockMaterial.dispose();
     this.spriteMaterial?.dispose();

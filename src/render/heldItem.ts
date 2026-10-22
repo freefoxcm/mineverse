@@ -28,7 +28,7 @@ export interface ExtrudedItemGeometry {
 }
 
 /** Icon thickness in icon pixels (32 px = 1 world unit before item scale). */
-export const ITEM_THICKNESS_PX = 2;
+export const ITEM_THICKNESS_PX = 10;
 const ICON_SIZE = 32;
 const ALPHA_THRESHOLD = 128;
 
@@ -142,7 +142,7 @@ export function buildExtrudedItemGeometry(itemId: string, layer: number): Extrud
       [1, 1],
       [0, 1],
     ],
-    [1, 1, 1],
+    [0.86, 0.86, 0.86],
   );
   pushQuad(
     buffers,
@@ -159,7 +159,7 @@ export function buildExtrudedItemGeometry(itemId: string, layer: number): Extrud
       [1, 1],
       [1, 0],
     ],
-    [0.64, 0.64, 0.64],
+    [0.52, 0.52, 0.52],
   );
 
   // Side walls only along the alpha silhouette. Sample one pixel inset (not the
@@ -186,7 +186,7 @@ export function buildExtrudedItemGeometry(itemId: string, layer: number): Extrud
             [u0 - 0.5, yBottom, zFront],
           ],
           [edgeUv, edgeUv, edgeUv, edgeUv],
-          [0.92, 0.92, 0.92],
+          [0.7, 0.7, 0.7],
         );
       }
       if (!isOpaque(px + 1, py)) {
@@ -201,7 +201,7 @@ export function buildExtrudedItemGeometry(itemId: string, layer: number): Extrud
             [u1 - 0.5, yBottom, zBack],
           ],
           [edgeUv, edgeUv, edgeUv, edgeUv],
-          [0.74, 0.74, 0.74],
+          [0.5, 0.5, 0.5],
         );
       }
       if (!isOpaque(px, py - 1)) {
@@ -216,7 +216,7 @@ export function buildExtrudedItemGeometry(itemId: string, layer: number): Extrud
             [u0 - 0.5, yTop, zBack],
           ],
           [edgeUv, edgeUv, edgeUv, edgeUv],
-          [1, 1, 1],
+          [0.86, 0.86, 0.86],
         );
       }
       if (!isOpaque(px, py + 1)) {
@@ -231,7 +231,7 @@ export function buildExtrudedItemGeometry(itemId: string, layer: number): Extrud
             [u0 - 0.5, yBottom, zFront],
           ],
           [edgeUv, edgeUv, edgeUv, edgeUv],
-          [0.62, 0.62, 0.62],
+          [0.4, 0.4, 0.4],
         );
       }
     }

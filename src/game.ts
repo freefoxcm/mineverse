@@ -56,6 +56,13 @@ import { getItem } from './world/items';
 import { World } from './world/world';
 import { createTintResolver, type TintResolver } from './world/worldgen';
 import { ChunkManager } from './world/chunkManager';
+import {
+  CREATIVE_STARTER_KIT,
+  SURVIVAL_STARTER_KIT,
+  findOccupiedSlot,
+  resolveHotbarSlot,
+  type SlotDirection,
+} from './player/hotbar';
 
 const TICK_SECONDS = TICK_MS / 1000;
 const MAX_FRAME_DELTA = 0.25;
@@ -63,30 +70,6 @@ const MAX_BOOT_RENDER_DISTANCE = 8;
 
 const WATER_FOG = new THREE.Color(0x1d4a63);
 const LAVA_FOG = new THREE.Color(0x8a2a00);
-
-/** Starting inventory for brand-new worlds (survival gets tools, creative gets blocks). */
-const SURVIVAL_STARTER_KIT: ReadonlyArray<readonly [string, number]> = [
-  ['stone_pickaxe', 1],
-  ['stone_axe', 1],
-  ['stone_sword', 1],
-  ['torch', 16],
-  ['oak_planks', 32],
-  ['cobblestone', 32],
-  ['crafting_table', 1],
-  ['apple', 8],
-];
-
-const CREATIVE_STARTER_KIT: ReadonlyArray<readonly [string, number]> = [
-  ['grass_block', 64],
-  ['oak_planks', 64],
-  ['cobblestone', 64],
-  ['glass', 64],
-  ['torch', 64],
-  ['oak_log', 64],
-  ['sand', 64],
-  ['crafting_table', 64],
-  ['white_wool', 64],
-];
 
 const MOB_SOUND_IDS: Record<string, SoundId | null> = {
   zombie: 'zombie',
@@ -440,8 +423,32 @@ export class Game {
       const durability = maxDurabilityOf(itemId);
       this.player.addItem(itemId, count, durability > 0 ? durability : undefined);
     }
-    this.inventory.setSelectedSlot(0);
-    this.player.setSelectedSlot(0);
+    this.selectHotbarSlot(0);
+    this.lastHandSignature = '';
+  }
+
+  /** Select a hotbar slot, skipping empty stacks so the hand never goes blank. */
+  private selectHotbarSlot(requested: number, direction: SlotDirection = 1): void {
+    const resolved = resolveHotbarSlot(
+      this.player.inventory,
+      requested,
+      this.player.selectedSlot,
+      direction,
+    );
+    this.player.setSelectedSlot(resolved);
+    this.inventory.setSelectedSlot(resolved);
+    this.lastHandSignature = '';
+  }
+
+  /** After consuming/placing the last item or an inventory edit, keep a useful slot selected. */
+  private ensureOccupiedSelection(): void {
+    const slots = this.player.inventory;
+    if (slots[this.player.selectedSlot]?.item) return;
+    const next = findOccupiedSlot(slots, this.player.selectedSlot + 1, 1)
+      ?? findOccupiedSlot(slots, this.player.selectedSlot - 1, -1);
+    if (next === null) return;
+    this.player.setSelectedSlot(next);
+    this.inventory.setSelectedSlot(next);
     this.lastHandSignature = '';
   }
 
@@ -494,13 +501,12 @@ export class Game {
       }
       const hotbarSlot = this.input.consumeHotbarSlot();
       if (hotbarSlot !== null) {
-        this.player.setSelectedSlot(hotbarSlot);
-        this.inventory.setSelectedSlot(hotbarSlot);
+        this.selectHotbarSlot(hotbarSlot, 1);
       }
       const scroll = this.input.consumeScroll();
       if (scroll !== 0) {
-        this.player.setSelectedSlot(this.player.selectedSlot + scroll);
-        this.inventory.setSelectedSlot(this.player.selectedSlot);
+        const direction: SlotDirection = scroll > 0 ? 1 : -1;
+        this.selectHotbarSlot(this.player.selectedSlot + direction, direction);
       }
 
       this.accumulator += delta;
@@ -579,6 +585,7 @@ export class Game {
     const time = this.world.time();
     this.sky.update(this.renderer.camera, time.timeOfDay, time.daylight);
     this.updateMaterials(time.daylight);
+    this.ensureOccupiedSelection();
     this.updateHand(delta);
     this.playerModel.update(delta, this.player, this.thirdPerson && gameplayActive);
     this.particles.update(delta);
@@ -1296,9 +1303,10 @@ export class Game {
         this.input.state.use = pressed;
       },
       scroll: (notches) => {
-        this.player.setSelectedSlot(this.player.selectedSlot + notches);
+        const direction: SlotDirection = notches >= 0 ? 1 : -1;
+        this.selectHotbarSlot(this.player.selectedSlot + direction, direction);
       },
-      selectSlot: (index) => this.player.setSelectedSlot(index),
+      selectSlot: (index) => this.selectHotbarSlot(index, 1),
       give: (item, count) => this.give(item, count),
       isPointerLocked: () => this.input.pointerLocked,
       requestPointerLock: () => this.input.requestPointerLock(),

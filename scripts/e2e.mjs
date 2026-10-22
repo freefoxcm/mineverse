@@ -166,6 +166,14 @@ async function main() {
       return window.__MC__.hotbar;
     });
     check('hotbar filled', hotbar.filter((slot) => slot.item).length >= 8);
+    check('starter kit fills all nine hotbar slots', hotbar.filter((slot) => slot.item).length === 9, String(hotbar.filter((slot) => slot.item).length));
+    const skipCheck = await evaluate(() => {
+      const mc = window.__MC__;
+      mc.selectSlot(8);
+      const selected = mc.getInventoryState();
+      return selected.selected;
+    });
+    check('selecting an occupied slot is stable', typeof skipCheck === 'number' && skipCheck >= 0 && skipCheck <= 8, String(skipCheck));
     await wait(300);
     await shot('02-hud-items');
 
