@@ -29,6 +29,7 @@ import { blockNumeric, faceTexture, getBlockDef, type BlockDef } from '../world/
 import { getItem, type ItemDef } from '../world/items';
 import type { TextureAtlas } from './atlas';
 import { HeldItemGeometryCache, heldCategory, type HeldCategory } from './heldItem';
+import { buildHeldToolModel } from './heldTool';
 
 export type HandSwingKind = 'attack' | 'place';
 
@@ -346,6 +347,7 @@ export class FirstPersonHand {
   private readonly blockMaterial: THREE.ShaderMaterial;
   private readonly spriteMaterial: THREE.ShaderMaterial | null;
   private readonly fallbackMaterial: THREE.MeshBasicMaterial;
+  private readonly toolMaterial: THREE.MeshBasicMaterial;
   private readonly handRoot = new THREE.Group();
   private readonly itemCache = new HeldItemGeometryCache();
   private itemRoot: THREE.Group | null = null;
@@ -376,6 +378,10 @@ export class FirstPersonHand {
       : null;
     if (this.spriteMaterial && options.itemLayerOf) this.itemLayerOf = options.itemLayerOf;
     this.fallbackMaterial = new THREE.MeshBasicMaterial({ color: 0x9a9a9a });
+    this.toolMaterial = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.DoubleSide,
+    });
 
     this.scene.add(this.handRoot);
     this.setItem(null);
@@ -413,6 +419,7 @@ export class FirstPersonHand {
     let geometry: THREE.BufferGeometry | null = null;
     let material: THREE.Material = this.fallbackMaterial;
     let scale = 1;
+    let toolScale: number | null = null;
     let grip: Vec3Tuple = [0, 0, 0];
     let kind: HandItemKind = 'fallback';
     let owned = true;
@@ -424,15 +431,23 @@ export class FirstPersonHand {
       scale = HAND_SCALES.block;
       grip = [0.24, -0.28, 0.18];
       kind = 'block';
-    } else if (this.spriteMaterial && this.itemLayerOf) {
-      const extruded = this.itemCache.get(itemId, this.itemLayerOf(itemId));
-      if (extruded) {
-        geometry = extruded.geometry;
-        grip = extruded.grip;
-        scale = HAND_SCALES.sprite;
-        material = this.spriteMaterial;
+    } else {
+      const tool = buildHeldToolModel(itemId);
+      if (tool) {
+        geometry = tool.geometry;
+        material = this.toolMaterial;
+        toolScale = tool.scale;
         kind = 'sprite';
-        owned = false;
+      } else if (this.spriteMaterial && this.itemLayerOf) {
+        const extruded = this.itemCache.get(itemId, this.itemLayerOf(itemId));
+        if (extruded) {
+          geometry = extruded.geometry;
+          grip = extruded.grip;
+          scale = HAND_SCALES.sprite;
+          material = this.spriteMaterial;
+          kind = 'sprite';
+          owned = false;
+        }
       }
     }
 
@@ -449,7 +464,7 @@ export class FirstPersonHand {
     const root = new THREE.Group();
     root.rotation.set(...HELD_ITEM_ROTATIONS[category]);
     const itemMesh = new THREE.Mesh(geometry, material);
-    const drawScale = kind === 'sprite' ? scale * 1.5 : scale;
+    const drawScale = toolScale ?? (kind === 'sprite' ? scale * 1.5 : scale);
     itemMesh.scale.setScalar(drawScale);
     itemMesh.position.set(-grip[0] * drawScale, -grip[1] * drawScale, -grip[2] * drawScale);
     root.add(itemMesh);
@@ -478,6 +493,7 @@ export class FirstPersonHand {
     this.light = Math.max(0.38, Math.min(1.2, daylight));
     this.blockMaterial.uniforms.uLight.value = this.light;
     if (this.spriteMaterial) this.spriteMaterial.uniforms.uLight.value = this.light;
+    this.toolMaterial.color.setScalar(this.light);
   }
 
   get heldItemId(): string | null {
@@ -611,6 +627,7 @@ export class FirstPersonHand {
     this.itemCache.dispose();
     this.blockMaterial.dispose();
     this.spriteMaterial?.dispose();
+    this.toolMaterial.dispose();
     this.fallbackMaterial.dispose();
     this.scene.clear();
   }
