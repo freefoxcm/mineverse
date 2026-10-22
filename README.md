@@ -7,6 +7,8 @@
 **在线游玩**：<https://freefoxcm.github.io/mineverse/>（GitHub Pages）
 **源码仓库**：<https://github.com/freefoxcm/mineverse>
 
+> 页面更新后如仍加载旧资源，用 **Ctrl+Shift+R** 强制刷新，或在地址后加 `?v=2` 打开新版本；游戏内已不再拦截 Ctrl+F5 / Ctrl+R 等浏览器快捷键。
+
 ![MineVerse 平原](docs/screenshots/hero.png)
 
 ## 截图

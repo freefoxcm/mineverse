@@ -308,6 +308,14 @@ export class InputManager {
 
     this.add(window, 'keydown', (event) => {
       if (!this.enabled) return;
+      // Never swallow browser/OS shortcuts (Ctrl+F5, Ctrl+Shift+R, Ctrl+R,
+      // Alt+…). Ctrl alone still drives sprint, so keep the Control keys.
+      const controlKey = event.code === 'ControlLeft' || event.code === 'ControlRight';
+      const modifier = event.ctrlKey || event.metaKey || event.altKey;
+      const hardReload =
+        (event.code === 'F5' && (event.ctrlKey || event.metaKey || event.shiftKey)) ||
+        (event.code === 'KeyR' && (event.ctrlKey || event.metaKey));
+      if (!controlKey && (modifier || hardReload)) return;
       if (handleKeyDown(this.state, event.code, performance.now()) && this.options.preventDefault) {
         event.preventDefault();
       }
